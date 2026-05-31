@@ -140,6 +140,9 @@ class GestureDetector:
         self._swipe_drop_cooldown_frames: int = 8
         self._prev_wrist: dict[int, tuple[float, float] | None] = {}
         self._curled_count: dict[int, int] = {}
+        self._last_hand_gesture: dict[int, Gesture] = {}
+        self._gesture_settle_cooldown: dict[int, int] = {}
+        self._gesture_settle_cooldown_frames: int = 3
 
         # Axis-dominance gates: if the opposite axis exceeds this per-frame
         # velocity, the detector suppresses itself.  Prevents wrist-extension
@@ -168,6 +171,8 @@ class GestureDetector:
                 self._last_x.pop(hand_id, None)
                 self._prev_wrist.pop(hand_id, None)
                 self._curled_count.pop(hand_id, None)
+                self._last_hand_gesture.pop(hand_id, None)
+                self._gesture_settle_cooldown.pop(hand_id, None)
 
         if not hands:
             return GestureState(actions=actions_for_gesture(Gesture.NONE))
@@ -181,6 +186,8 @@ class GestureDetector:
                 gesture = self._detect_fist(hand, hand_no)
             if gesture is Gesture.NONE:
                 gesture = self._detect_swipe(hand, hand_no)
+
+            gesture = self._debounce_gesture(hand_no, gesture)
 
             if gesture is not Gesture.NONE:
                 if last_gesture is Gesture.NONE:
@@ -205,6 +212,8 @@ class GestureDetector:
         self._swipe_drop_cooldown.clear()
         self._prev_wrist.clear()
         self._curled_count.clear()
+        self._last_hand_gesture.clear()
+        self._gesture_settle_cooldown.clear()
 
     @staticmethod
     def _delta_over_window(history: deque[float]) -> float | None:
@@ -212,6 +221,23 @@ class GestureDetector:
         if len(history) < history.maxlen:
             return None
         return history[-1] - history[0]
+
+    def _debounce_gesture(self, hand_no: int, gesture: Gesture) -> Gesture:
+        prev = self._last_hand_gesture.get(hand_no, Gesture.NONE)
+        cooldown = self._gesture_settle_cooldown.get(hand_no, 0)
+
+        if cooldown > 0:
+            self._gesture_settle_cooldown[hand_no] = cooldown - 1
+
+        if gesture != Gesture.NONE and prev == Gesture.NONE and cooldown > 0:
+            if gesture != Gesture.SWIPE_DOWN_FAST:
+                gesture = Gesture.NONE
+
+        if gesture != Gesture.NONE:
+            self._gesture_settle_cooldown[hand_no] = self._gesture_settle_cooldown_frames
+
+        self._last_hand_gesture[hand_no] = gesture
+        return gesture
 
     def _detect_fist(self, hand: HandData, hand_no: int) -> Gesture:
         wrist = hand.landmarks_norm[WRIST]
