@@ -19,6 +19,7 @@ import time
 from HandTrackingModule import HandData, HandTracker
 
 WRIST = 0
+MIDDLE_TIP = 12
 
 # Used only for closed-hand (fist) detection — not per-finger gesture tracking.
 _FIST_TIP_MCP_PAIRS = (
@@ -117,12 +118,14 @@ class GestureDetector:
         hard_drop_cooldown: int = 15,
         swipe_threshold: float = 0.08,
         swipe_history_frames: int = 5,
+        pitch_forward_cutoff: float = -0.08,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self.min_curled_fingers = min_curled_fingers
         self.hard_drop_velocity = hard_drop_velocity
         self.soft_drop_threshold = soft_drop_threshold
         self.swipe_threshold = swipe_threshold
+        self._pitch_forward_cutoff = pitch_forward_cutoff
 
         self._drop_history_frames = drop_history_frames
         self._y_history: dict[int, deque[float]] = {}
@@ -221,6 +224,11 @@ class GestureDetector:
             velocity = abs(wrist_x - prev_x) + abs(wrist_y - prev_y)
             if velocity >= self._soft_drop_velocity_threshold * 2:
                 min_needed += 1
+
+        # When fingers pitch toward the camera (z is negative), require more curled
+        # fingers to prevent accidental fist during downward swipes
+        if hand.landmarks_norm[MIDDLE_TIP][2] < self._pitch_forward_cutoff:
+            min_needed += 1
 
         self._prev_wrist[hand_no] = (wrist_x, wrist_y)
 
