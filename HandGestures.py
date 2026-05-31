@@ -1,14 +1,9 @@
 """
-All hand gesture logic lives here.
-
 To add a gesture:
   1. Add a value to `Gesture`.
   2. Map it in `GESTURE_ACTIONS`.
   3. Implement a `_detect_*` method on `GestureDetector`.
   4. Call that method from `GestureDetector.update()`.
-
-Run directly to preview on the webcam:
-    python HandGestures.py
 """
 
 from __future__ import annotations
@@ -68,16 +63,18 @@ GESTURE_ACTIONS: dict[Gesture, str] = {
 }
 
 
+"""Init"""
 @dataclass
 class GestureState:
     gesture: Gesture = Gesture.NONE
     actions: dict[str, bool] = field(default_factory=dict)
 
+    #filters list into only gestures that == true.
     @property
     def active_actions(self) -> list[str]:
         return [name for name, pressed in self.actions.items() if pressed]
 
-
+"""Ensures only one gesture is true, turns everything else false"""
 def actions_for_gesture(gesture: Gesture) -> dict[str, bool]:
     actions = {name: False for name in ALL_ACTIONS}
     action = GESTURE_ACTIONS.get(gesture)
@@ -85,7 +82,7 @@ def actions_for_gesture(gesture: Gesture) -> dict[str, bool]:
         actions[action] = True
     return actions
 
-
+"""Draws overlay: Gesture + Action"""
 def draw_gesture_overlay(img, state: GestureState) -> None:
     cv2.putText(
         img,
@@ -107,22 +104,26 @@ def draw_gesture_overlay(img, state: GestureState) -> None:
         2,
     )
 
-"""Converts `HandData` lists into `GestureState` each frame."""
+"""Converts `HandData` lists into `GestureState` for frame."""
 class GestureDetector:
     def __init__(self, fist_curled_threshold: float = 0.08, min_curled_fingers: int = 4) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self.min_curled_fingers = min_curled_fingers
 
+    """Looks for detection based on current frame"""
     def update(self, hands: list[HandData], hand_no: int = 0) -> GestureState:
         if hand_no >= len(hands):
             self.reset()
             return GestureState(actions=actions_for_gesture(Gesture.NONE))
 
+        #Picks Hand
         hand = hands[hand_no]
 
+        #Calls detect fist
         gesture = self._detect_fist(hand)
 
-        # Future swipe detectors:
+        #Always gets fist detect first, which returns Gesture.none
+
 #        if gesture is Gesture.NONE:
 #            gesture = self._detect_swipe(hand)
 
@@ -135,13 +136,15 @@ class GestureDetector:
         pass
 
     def _detect_fist(self, hand: HandData) -> Gesture:
-        norm = hand.landmarks_norm
         curled_count = 0
 
+        # A curled finger has its tip close to its mcp
         for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
-            tip = norm[tip_idx]
-            mcp = norm[mcp_idx]
-            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1])
+            #[x, y, z] based on finger landmark
+            tip = hand.landmarks_norm[tip_idx]
+            mcp = hand.landmarks_norm[mcp_idx]
+            #calculate its distances based on x and y, z doesnt matter.
+            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1]) 
             if distance < self.fist_curled_threshold:
                 curled_count += 1
 
@@ -149,7 +152,12 @@ class GestureDetector:
             return Gesture.FIST
         return Gesture.NONE
 
+    #right hand swipes left
     def _detect_swipe_left(self, hand: HandData) -> Gesture:
+        return Gesture.NONE
+        
+    #left hands swipes right
+    def _detect_swipe_right(self, hand: HandData) -> Gesture:
         return Gesture.NONE
 
 
@@ -165,15 +173,17 @@ def main() -> None:
     pTime = 0
     detector = GestureDetector()
 
-    with HandTracker(max_hands=1) as tracker:
+    with HandTracker(max_hands=2) as tracker:
         while True:
             success, img = cap.read()
             if not success:
                 break
 
             img, hands = tracker.find_hands(img)
+            img = tracker.label_hands(img)
             state = detector.update(hands)
             draw_gesture_overlay(img, state)
+            
 
             cTime = time.time()
             fps = 1 / (cTime - pTime) if pTime else 0

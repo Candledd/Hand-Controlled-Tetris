@@ -13,6 +13,9 @@ mp_hands = mp.tasks.vision.HandLandmarksConnections
 mp_drawing = mp.tasks.vision.drawing_utils
 mp_drawing_styles = mp.tasks.vision.drawing_styles
 
+WRIST = 0
+HAND_LABEL_COLOR = (88, 205, 54)
+
 
 @dataclass
 class HandData:
@@ -38,6 +41,25 @@ def draw_landmarks_on_image(rgb_image: np.ndarray, detection_result) -> np.ndarr
         )
 
     return annotated_image
+
+
+def label_hands_on_image(img: np.ndarray, hands: list[HandData]) -> None:
+    """Draw Left/Right labels for each detected hand."""
+    for hand in hands:
+        if not hand.landmarks_px:
+            continue
+
+        wrist_x, wrist_y = hand.landmarks_px[WRIST]
+        cv2.putText(
+            img,
+            hand.handedness,
+            (wrist_x - 30, wrist_y - 20),
+            cv2.FONT_HERSHEY_DUPLEX,
+            1,
+            HAND_LABEL_COLOR,
+            2,
+            cv2.LINE_AA,
+        )
 
 
 class HandTracker:
@@ -108,6 +130,13 @@ class HandTracker:
             for _, x, y in positions:
                 cv2.circle(img, (x, y), 5, (255, 0, 255), cv2.FILLED)
         return positions
+
+    def label_hands(
+        self, img: np.ndarray, hands: list[HandData] | None = None
+    ) -> np.ndarray:
+        """Draw Left/Right labels on the frame. Uses last detected hands if none passed."""
+        label_hands_on_image(img, hands if hands is not None else self._hands)
+        return img
 
     def get_finger_tips(self, hand_no: int = 0) -> list[tuple[int, int]]:
         """Pixel positions of the five fingertips for gesture / movement logic."""
