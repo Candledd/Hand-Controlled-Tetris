@@ -1,64 +1,42 @@
 import cv2
-import mediapipe as mp
-import numpy as np
 import time
 
-BaseOptions = mp.tasks.BaseOptions
-HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-VisionRunningMode = mp.tasks.vision.RunningMode
-
-mp_hands = mp.tasks.vision.HandLandmarksConnections
-mp_drawing = mp.tasks.vision.drawing_utils
-mp_drawing_styles = mp.tasks.vision.drawing_styles
-
-MARGIN = 10
-FONT_SIZE = 1
-FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (88, 205, 54)
-
-def draw_landmarks_on_video(rgb_image, detection_result):
-    annotated_image = np.copy(rgb_image)
-    if not detection_result or not detection_result.hand_landmarks:
-        return annotated_image
-
-    #for each hand
-    for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
-        #draws the circles and lines
-        mp_drawing.draw_landmarks(
-            annotated_image,
-            hand_landmarks,
-            mp_hands.HAND_CONNECTIONS,
-            mp_drawing_styles.get_default_hand_landmarks_style(),
-            mp_drawing_styles.get_default_hand_connections_style(),
-        )
-
-    return annotated_image
+from HandTrackingModule import HandTracker
 
 
-def main():
-    options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path="hand_landmarker.task"),
-        running_mode=VisionRunningMode.VIDEO,
-        num_hands=2,
-        min_hand_detection_confidence=0.7,
-        min_hand_presence_confidence=0.7,
+def draw_fps(img, fps: float) -> None:
+    cv2.putText(
+        img,
+        str(int(fps)),
+        (10, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 255, 255),
+        1,
     )
-    cap = cv2.VideoCapture(0)
 
-    with HandLandmarker.create_from_options(options) as landmarker:
+
+def main() -> None:
+    cap = cv2.VideoCapture(0)
+    pTime = 0
+
+    with HandTracker(max_hands=2) as tracker:
         while True:
             success, img = cap.read()
             if not success:
                 break
 
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-            detection_result = landmarker.detect_for_video(mp_image, timestamp_ms=int(time.time() * 1000))
+            img, hands = tracker.find_hands(img)
 
-            annotated_image = draw_landmarks_on_video(img_rgb, detection_result)
-            cv2.imshow("Image", cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
+            # if hands:
+            #     index_tip = tracker.find_position(hand_no=0, landmark_id=8)
 
+            cTime = time.time()
+            fps = 1 / (cTime - pTime) if pTime else 0
+            pTime = cTime
+            draw_fps(img, fps)
+
+            cv2.imshow("Image", img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
