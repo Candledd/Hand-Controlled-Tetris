@@ -118,7 +118,6 @@ class GestureDetector:
         soft_drop_cooldown: int = 8,
         swipe_threshold: float = 0.08,
         swipe_history_frames: int = 5,
-        swipe_cooldown: int = 10,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self.min_curled_fingers = min_curled_fingers
@@ -136,9 +135,8 @@ class GestureDetector:
         self._soft_drop_cooldown_frames: int = soft_drop_cooldown
         self._hard_drop_velocity_count: dict[int, int] = {}
         self._x_history: dict[int, deque[float]] = {}
-        self._swipe_cooldown: dict[int, int] = {}
+        self._last_x: dict[int, float | None] = {}
         self._swipe_history_frames: int = swipe_history_frames
-        self._swipe_cooldown_frames: int = swipe_cooldown
 
         # Axis-dominance gates: if the opposite axis exceeds this per-frame
         # velocity, the detector suppresses itself.  Prevents wrist-extension
@@ -146,20 +144,25 @@ class GestureDetector:
         self._horizontal_gate = swipe_threshold / swipe_history_frames * 1.5
         self._vertical_gate = soft_drop_threshold / drop_history_frames * 2.0
 
+        # Per-frame velocity threshold for continuous swipe motion
+        self._swipe_velocity_threshold = swipe_threshold / swipe_history_frames * 0.5
+
     """Looks for detection based on current frame"""
     def update(self, hands: list[HandData]) -> GestureState:
         # Clean up state for hands no longer present
         present = set(range(len(hands)))
         for hand_id in list(self._y_history.keys()):
             if hand_id not in present:
-                del self._y_history[hand_id]
-                del self._prev_y[hand_id]
-                del self._prev_x[hand_id]
-                del self._hard_drop_cooldown[hand_id]
-                del self._soft_drop_cooldown[hand_id]
-                del self._hard_drop_velocity_count[hand_id]
-                del self._x_history[hand_id]
-                del self._swipe_cooldown[hand_id]
+                self._y_history.pop(hand_id, None)
+                self._prev_y.pop(hand_id, None)
+                self._prev_x.pop(hand_id, None)
+                self._hard_drop_cooldown.pop(hand_id, None)
+                self._soft_drop_cooldown.pop(hand_id, None)
+                self._hard_drop_velocity_count.pop(hand_id, None)
+        for hand_id in list(self._x_history.keys()):
+            if hand_id not in present:
+                self._x_history.pop(hand_id, None)
+                self._last_x.pop(hand_id, None)
 
         if not hands:
             return GestureState(actions=actions_for_gesture(Gesture.NONE))
@@ -195,7 +198,7 @@ class GestureDetector:
         self._soft_drop_cooldown.clear()
         self._hard_drop_velocity_count.clear()
         self._x_history.clear()
-        self._swipe_cooldown.clear()
+        self._last_x.clear()
 
     @staticmethod
     def _delta_over_window(history: deque[float]) -> float | None:
@@ -224,37 +227,40 @@ class GestureDetector:
         # Initialize per-hand state on first sighting
         if hand_no not in self._x_history:
             self._x_history[hand_no] = deque(maxlen=self._swipe_history_frames)
-            self._swipe_cooldown[hand_no] = 0
+            self._last_x[hand_no] = None
 
         average_x = sum(lm[0] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
         history = self._x_history[hand_no]
 
-        # Cooldown — prevents retriggering
-        if self._swipe_cooldown[hand_no] > 0:
-            self._swipe_cooldown[hand_no] -= 1
+        # Gate: if the hand is moving downward significantly (dropping),
+        # suppress swipe detection (uses y-history from _detect_drop)
+        y_history = self._y_history.get(hand_no)
+        if y_history is not None and len(y_history) >= 2:
+            y_velocity = abs(y_history[-1] - y_history[-2])
+            if y_velocity >= self._vertical_gate:
+                history.append(average_x)
+                self._last_x[hand_no] = average_x
+                return Gesture.NONE
+
+        # Continuous per-frame velocity: fires every frame the hand moves
+        # in the allowed direction above threshold (no cooldown)
+        if self._last_x[hand_no] is not None:
+            velocity = average_x - self._last_x[hand_no]
+            is_right = hand.handedness == "Right"
+
+            gesture = Gesture.NONE
+            if is_right and velocity >= self._swipe_velocity_threshold:
+                gesture = Gesture.SWIPE_LEFT
+            elif not is_right and velocity <= -self._swipe_velocity_threshold:
+                gesture = Gesture.SWIPE_RIGHT
+
+            self._last_x[hand_no] = average_x
             history.append(average_x)
-            return Gesture.NONE
+            return gesture
 
+        self._last_x[hand_no] = average_x
         history.append(average_x)
-        delta = self._delta_over_window(history)
-        if delta is None:
-            return Gesture.NONE
-        if abs(delta) < self.swipe_threshold:
-            return Gesture.NONE
-
-        is_right = hand.handedness == "Right"
-        moving_left = delta < 0
-
-        # Right hand swiping left = SWIPE_LEFT, left hand swiping right = SWIPE_RIGHT
-        # Also mirrors the opposite direction for natural two-hand control
-        gesture = Gesture.NONE
-        if is_right:
-            gesture = Gesture.SWIPE_LEFT if moving_left else Gesture.SWIPE_RIGHT
-        else:
-            gesture = Gesture.SWIPE_RIGHT if moving_left else Gesture.SWIPE_LEFT
-
-        self._swipe_cooldown[hand_no] = self._swipe_cooldown_frames
-        return gesture
+        return Gesture.NONE
 
     def _detect_drop(self, hand: HandData, hand_no: int) -> Gesture:
         # Initialize per-hand state on first sighting
