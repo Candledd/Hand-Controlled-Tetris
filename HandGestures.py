@@ -7,6 +7,7 @@ To add a gesture:
 """
 
 from __future__ import annotations
+from collections import deque
 
 import math
 from dataclasses import dataclass, field
@@ -106,9 +107,29 @@ def draw_gesture_overlay(img, state: GestureState) -> None:
 
 """Converts `HandData` lists into `GestureState` for frame."""
 class GestureDetector:
-    def __init__(self, fist_curled_threshold: float = 0.08, min_curled_fingers: int = 4) -> None:
+    def __init__(
+        self,
+        fist_curled_threshold: float = 0.07,
+        min_curled_fingers: int = 4,
+        swipe_right_threshold: float = 0.08,
+        swipe_left_threshold: float = 0.08,
+        hard_drop_velocity: float = 0.07,
+        soft_drop_threshold: float = 0.05,
+        drop_history_frames: int = 6,
+        hard_drop_cooldown: int = 15,
+    ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self.min_curled_fingers = min_curled_fingers
+        self.swipe_right_threshold = swipe_right_threshold
+        self.swipe_left_threshold = swipe_left_threshold
+        self.hard_drop_velocity = hard_drop_velocity
+        self.soft_drop_threshold = soft_drop_threshold
+
+        self._drop_history_frames = drop_history_frames
+        self._y_history: deque[float] = deque(maxlen=drop_history_frames)
+        self._prev_y: float | None = None
+        self._hard_drop_cooldown: int = 0
+        self._hard_drop_cooldown_frames: int = hard_drop_cooldown
 
     """Looks for detection based on current frame"""
     def update(self, hands: list[HandData], hand_no: int = 0) -> GestureState:
@@ -119,13 +140,11 @@ class GestureDetector:
         #Picks Hand
         hand = hands[hand_no]
 
-        #Calls detect fist
         gesture = self._detect_fist(hand)
-
-        #Always gets fist detect first, which returns Gesture.none
-
-#        if gesture is Gesture.NONE:
-#            gesture = self._detect_swipe(hand)
+        if gesture is Gesture.NONE:
+            gesture = self._detect_drop(hand)
+        if gesture is Gesture.NONE:
+            gesture = self._detect_swipe(hand)
 
         return GestureState(
             gesture=gesture,
@@ -133,18 +152,28 @@ class GestureDetector:
         )
 
     def reset(self) -> None:
-        pass
+        self._y_history.clear()
+        self._prev_y = None
+        self._hard_drop_cooldown = 0
+
+    @staticmethod
+    def _delta_over_window(history: deque[float]) -> float | None:
+        """Return newest - oldest once the deque is full; otherwise None."""
+        if len(history) < history.maxlen:
+            return None
+        return history[-1] - history[0]
 
     def _detect_fist(self, hand: HandData) -> Gesture:
         curled_count = 0
 
-        # A curled finger has its tip close to its mcp
+        #either hand, a curled finger has its tip close to its mcp
         for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
             #[x, y, z] based on finger landmark
             tip = hand.landmarks_norm[tip_idx]
             mcp = hand.landmarks_norm[mcp_idx]
-            #calculate its distances based on x and y, z doesnt matter.
-            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1]) 
+            #calculate its distances based on x and y,
+            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1], tip[2] - mcp[2]) 
+
             if distance < self.fist_curled_threshold:
                 curled_count += 1
 
@@ -152,15 +181,39 @@ class GestureDetector:
             return Gesture.FIST
         return Gesture.NONE
 
-    #right hand swipes left
-    def _detect_swipe_left(self, hand: HandData) -> Gesture:
-        return Gesture.NONE
-        
-    #left hands swipes right
-    def _detect_swipe_right(self, hand: HandData) -> Gesture:
+    def _detect_swipe(self, hand: HandData) -> Gesture:
         return Gesture.NONE
 
+    #more akin to a flick of the wrist vs slowly droping now.
+    def _detect_drop(self, hand: HandData) -> Gesture:
+        average_y = sum(lm[1] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
 
+        # Cooldown
+        if self._hard_drop_cooldown > 0:
+            self._hard_drop_cooldown -= 1
+            self._y_history.append(average_y)
+            self._prev_y = average_y
+            return Gesture.NONE
+
+        #Hard drop - Instant
+        if self._prev_y is not None:
+            velocity = average_y - self._prev_y
+            if velocity >= self.hard_drop_velocity:
+                self._y_history.append(average_y)
+                self._prev_y = average_y
+                self._hard_drop_cooldown = self._hard_drop_cooldown_frames
+                return Gesture.SWIPE_DOWN_FAST
+
+        self._prev_y = average_y
+
+        #Soft drop - Sustained
+        self._y_history.append(average_y)
+        delta = self._delta_over_window(self._y_history)
+        if delta is None:
+            return Gesture.NONE
+        if delta >= self.soft_drop_threshold:
+            return Gesture.SWIPE_DOWN_SLOW
+        return Gesture.NONE
 
 
 
