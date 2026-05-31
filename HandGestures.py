@@ -115,7 +115,6 @@ class GestureDetector:
         soft_drop_threshold: float = 0.05,
         drop_history_frames: int = 6,
         hard_drop_cooldown: int = 15,
-        soft_drop_cooldown: int = 8,
         swipe_threshold: float = 0.08,
         swipe_history_frames: int = 5,
     ) -> None:
@@ -131,12 +130,13 @@ class GestureDetector:
         self._prev_x: dict[int, float | None] = {}
         self._hard_drop_cooldown: dict[int, int] = {}
         self._hard_drop_cooldown_frames: int = hard_drop_cooldown
-        self._soft_drop_cooldown: dict[int, int] = {}
-        self._soft_drop_cooldown_frames: int = soft_drop_cooldown
-        self._hard_drop_velocity_count: dict[int, int] = {}
         self._x_history: dict[int, deque[float]] = {}
         self._last_x: dict[int, float | None] = {}
         self._swipe_history_frames: int = swipe_history_frames
+        self._swipe_drop_cooldown: dict[int, int] = {}
+        self._swipe_drop_cooldown_frames: int = 8
+        self._prev_wrist: dict[int, tuple[float, float] | None] = {}
+        self._curled_count: dict[int, int] = {}
 
         # Axis-dominance gates: if the opposite axis exceeds this per-frame
         # velocity, the detector suppresses itself.  Prevents wrist-extension
@@ -144,8 +144,9 @@ class GestureDetector:
         self._horizontal_gate = swipe_threshold / swipe_history_frames * 1.5
         self._vertical_gate = soft_drop_threshold / drop_history_frames * 2.0
 
-        # Per-frame velocity threshold for continuous swipe motion
+        # Per-frame velocity thresholds for continuous motion
         self._swipe_velocity_threshold = swipe_threshold / swipe_history_frames * 0.5
+        self._soft_drop_velocity_threshold = soft_drop_threshold / drop_history_frames * 0.5
 
     """Looks for detection based on current frame"""
     def update(self, hands: list[HandData]) -> GestureState:
@@ -157,12 +158,13 @@ class GestureDetector:
                 self._prev_y.pop(hand_id, None)
                 self._prev_x.pop(hand_id, None)
                 self._hard_drop_cooldown.pop(hand_id, None)
-                self._soft_drop_cooldown.pop(hand_id, None)
-                self._hard_drop_velocity_count.pop(hand_id, None)
+                self._swipe_drop_cooldown.pop(hand_id, None)
         for hand_id in list(self._x_history.keys()):
             if hand_id not in present:
                 self._x_history.pop(hand_id, None)
                 self._last_x.pop(hand_id, None)
+                self._prev_wrist.pop(hand_id, None)
+                self._curled_count.pop(hand_id, None)
 
         if not hands:
             return GestureState(actions=actions_for_gesture(Gesture.NONE))
@@ -173,7 +175,7 @@ class GestureDetector:
         for hand_no, hand in enumerate(hands):
             gesture = self._detect_drop(hand, hand_no)
             if gesture is Gesture.NONE:
-                gesture = self._detect_fist(hand)
+                gesture = self._detect_fist(hand, hand_no)
             if gesture is Gesture.NONE:
                 gesture = self._detect_swipe(hand, hand_no)
 
@@ -195,10 +197,11 @@ class GestureDetector:
         self._prev_y.clear()
         self._prev_x.clear()
         self._hard_drop_cooldown.clear()
-        self._soft_drop_cooldown.clear()
-        self._hard_drop_velocity_count.clear()
         self._x_history.clear()
         self._last_x.clear()
+        self._swipe_drop_cooldown.clear()
+        self._prev_wrist.clear()
+        self._curled_count.clear()
 
     @staticmethod
     def _delta_over_window(history: deque[float]) -> float | None:
@@ -207,19 +210,32 @@ class GestureDetector:
             return None
         return history[-1] - history[0]
 
-    def _detect_fist(self, hand: HandData) -> Gesture:
-        curled_count = 0
+    def _detect_fist(self, hand: HandData, hand_no: int) -> Gesture:
+        wrist = hand.landmarks_norm[WRIST]
+        wrist_x, wrist_y = wrist[0], wrist[1]
 
-        #either hand, a curled finger has its tip close to its mcp
+        # During motion, require one more curled finger to trigger fist
+        min_needed = self.min_curled_fingers
+        if hand_no in self._prev_wrist and self._prev_wrist[hand_no] is not None:
+            prev_x, prev_y = self._prev_wrist[hand_no]
+            velocity = abs(wrist_x - prev_x) + abs(wrist_y - prev_y)
+            if velocity >= self._soft_drop_velocity_threshold * 2:
+                min_needed += 1
+
+        self._prev_wrist[hand_no] = (wrist_x, wrist_y)
+
+        curled_count = 0
         for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
             tip = hand.landmarks_norm[tip_idx]
             mcp = hand.landmarks_norm[mcp_idx]
-            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1]) 
+            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1])
 
             if distance < self.fist_curled_threshold:
                 curled_count += 1
 
-        if curled_count >= self.min_curled_fingers:
+        self._curled_count[hand_no] = curled_count
+
+        if curled_count >= min_needed:
             return Gesture.FIST
         return Gesture.NONE
 
@@ -242,6 +258,12 @@ class GestureDetector:
                 self._last_x[hand_no] = average_x
                 return Gesture.NONE
 
+        # Gate: if 2+ fingers are curled, hand is forming a fist — suppress swipe
+        if self._curled_count.get(hand_no, 0) >= 2:
+            history.append(average_x)
+            self._last_x[hand_no] = average_x
+            return Gesture.NONE
+
         # Continuous per-frame velocity: fires every frame the hand moves
         # in the allowed direction above threshold (no cooldown)
         if self._last_x[hand_no] is not None:
@@ -253,6 +275,9 @@ class GestureDetector:
                 gesture = Gesture.SWIPE_LEFT
             elif not is_right and velocity <= -self._swipe_velocity_threshold:
                 gesture = Gesture.SWIPE_RIGHT
+
+            if gesture is not Gesture.NONE:
+                self._swipe_drop_cooldown[hand_no] = self._swipe_drop_cooldown_frames
 
             self._last_x[hand_no] = average_x
             history.append(average_x)
@@ -269,8 +294,7 @@ class GestureDetector:
             self._prev_y[hand_no] = None
             self._prev_x[hand_no] = None
             self._hard_drop_cooldown[hand_no] = 0
-            self._soft_drop_cooldown[hand_no] = 0
-            self._hard_drop_velocity_count[hand_no] = 0
+            self._swipe_drop_cooldown[hand_no] = 0
 
         average_y = sum(lm[1] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
         average_x = sum(lm[0] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
@@ -284,7 +308,7 @@ class GestureDetector:
                 history.append(average_y)
                 self._prev_y[hand_no] = average_y
                 self._prev_x[hand_no] = average_x
-                self._hard_drop_velocity_count[hand_no] = 0
+                self._swipe_drop_cooldown[hand_no] = self._swipe_drop_cooldown_frames
                 return Gesture.NONE
 
         self._prev_x[hand_no] = average_x
@@ -294,40 +318,41 @@ class GestureDetector:
             self._hard_drop_cooldown[hand_no] -= 1
             history.append(average_y)
             self._prev_y[hand_no] = average_y
-            self._hard_drop_velocity_count[hand_no] = 0
             return Gesture.NONE
 
-        # Soft drop cooldown — only blocks soft drop retriggering
-        if self._soft_drop_cooldown[hand_no] > 0:
-            self._soft_drop_cooldown[hand_no] -= 1
-
-        # Hard drop — requires 2+ consecutive frames of high velocity
+        # Per-frame velocity check
         if self._prev_y[hand_no] is not None:
             velocity = average_y - self._prev_y[hand_no]
+
+            # Hard drop — single frame is enough for a fast flick
             if velocity >= self.hard_drop_velocity:
-                self._hard_drop_velocity_count[hand_no] += 1
-                if self._hard_drop_velocity_count[hand_no] >= 2:
-                    history.append(average_y)
-                    self._prev_y[hand_no] = average_y
-                    self._hard_drop_cooldown[hand_no] = self._hard_drop_cooldown_frames
-                    self._hard_drop_velocity_count[hand_no] = 0
-                    self._soft_drop_cooldown[hand_no] = 0
-                    return Gesture.SWIPE_DOWN_FAST
-            else:
-                self._hard_drop_velocity_count[hand_no] = 0
+                history.append(average_y)
+                self._prev_y[hand_no] = average_y
+                self._hard_drop_cooldown[hand_no] = self._hard_drop_cooldown_frames
+                self._swipe_drop_cooldown[hand_no] = 0
+                return Gesture.SWIPE_DOWN_FAST
+
+            # Swipe-drop cooldown — suppress soft drops briefly after a swipe
+            if self._swipe_drop_cooldown[hand_no] > 0:
+                self._swipe_drop_cooldown[hand_no] -= 1
+                self._prev_y[hand_no] = average_y
+                history.append(average_y)
+                return Gesture.NONE
+
+            # Gate: if 2+ fingers are curled, hand is forming a fist — suppress soft drop
+            if self._curled_count.get(hand_no, 0) >= 2:
+                self._prev_y[hand_no] = average_y
+                history.append(average_y)
+                return Gesture.NONE
+
+            # Soft drop — continuous per-frame velocity
+            if velocity >= self._soft_drop_velocity_threshold:
+                history.append(average_y)
+                self._prev_y[hand_no] = average_y
+                return Gesture.SWIPE_DOWN_SLOW
 
         self._prev_y[hand_no] = average_y
-
-        # Soft drop — sustained motion over window (only if cooldown expired)
         history.append(average_y)
-        if self._soft_drop_cooldown[hand_no] > 0:
-            return Gesture.NONE
-        delta = self._delta_over_window(history)
-        if delta is None:
-            return Gesture.NONE
-        if delta >= self.soft_drop_threshold:
-            self._soft_drop_cooldown[hand_no] = self._soft_drop_cooldown_frames
-            return Gesture.SWIPE_DOWN_SLOW
         return Gesture.NONE
 
 
