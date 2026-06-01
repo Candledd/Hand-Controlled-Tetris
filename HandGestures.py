@@ -11,6 +11,7 @@ from HandTrackingModule import HandData, HandTracker
 
 WRIST = 0
 INDEX_MCP = 5
+MIDDLE_MCP = 9
 MIDDLE_TIP = 12
 PINKY_MCP = 17
 
@@ -110,7 +111,7 @@ class GestureDetector:
     def __init__(
         self,
         fist_curled_threshold: float = 0.09,
-        min_curled_fingers: int = 4,
+        min_curled_fingers: int = 5,
         hard_drop_velocity: float = 0.035,
         soft_drop_threshold: float = 0.06,
         drop_velocity_divisor: int = 6,
@@ -119,7 +120,7 @@ class GestureDetector:
         swipe_velocity_divisor: int = 5,
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
-        ema_alpha: float = 0.5,
+        ema_alpha: float = 0.45,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -299,6 +300,18 @@ class GestureDetector:
     def _detect_fist(self, hand: HandData, hand_no: int) -> Gesture:
         wrist = hand.landmarks_norm[WRIST]
         wrist_x, wrist_y = wrist[0], wrist[1]
+
+        # ── In-plane rotation gate ──
+        # Prevent false fists when the hand is rotated horizontally.
+        # Calculate vector from wrist to base of middle finger.
+        mid_mcp = hand.landmarks_norm[MIDDLE_MCP]
+        up_dy = wrist_y - mid_mcp[1]  # positive when pointing UP
+        up_dx = mid_mcp[0] - wrist_x
+        
+        # Enforce a 90-degree upright cone (45 deg left/right).
+        # If horizontal or pointing down, suppress fist.
+        if up_dy < abs(up_dx):
+            return Gesture.NONE
 
         min_needed = self.min_curled_fingers
 
