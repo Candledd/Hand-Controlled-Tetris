@@ -116,7 +116,7 @@ class GestureDetector:
         self,
         fist_curled_threshold: float = 0.06,
         min_curled_fingers: int = 4,
-        hard_drop_velocity: float = 0.06,
+        hard_drop_velocity: float = 0.04,
         soft_drop_threshold: float = 0.05,
         drop_history_frames: int = 6,
         hard_drop_cooldown: int = 15,
@@ -325,15 +325,6 @@ class GestureDetector:
         average_x = hand_wrist_x
         history = self._y_history[hand_no]
 
-        # Gate: if hand is moving sideways with significant speed (swiping),
-        # suppress all drop detection to avoid accidental wrist-extension drops
-        if prev_wrist_x is not None:
-            x_velocity = abs(average_x - prev_wrist_x)
-            if x_velocity >= self._horizontal_gate:
-                history.append(average_y)
-                self._prev_y[hand_no] = average_y
-                return Gesture.NONE
-
         # Hard drop cooldown — completely blocks all drop detection
         if self._hard_drop_cooldown[hand_no] > 0:
             self._hard_drop_cooldown[hand_no] -= 1
@@ -341,11 +332,11 @@ class GestureDetector:
             self._prev_y[hand_no] = average_y
             return Gesture.NONE
 
-        # Per-frame velocity check
+        # Hard drop check — BEFORE the horizontal gate so fast deliberate
+        # downward flicks are never suppressed by mild sideways wrist drift
         if self._prev_y[hand_no] is not None:
             velocity = average_y - self._prev_y[hand_no]
 
-            # Hard drop — single frame is enough for a fast flick
             if velocity >= self.hard_drop_velocity:
                 history.append(average_y)
                 self._prev_y[hand_no] = average_y
@@ -353,6 +344,16 @@ class GestureDetector:
                 self._swipe_drop_cooldown[hand_no] = 0
                 return Gesture.SWIPE_DOWN_FAST
 
+        # Gate: if hand is moving sideways with significant speed (swiping),
+        # suppress soft drops to avoid accidental wrist-extension drops
+        if prev_wrist_x is not None:
+            x_velocity = abs(average_x - prev_wrist_x)
+            if x_velocity >= self._horizontal_gate:
+                history.append(average_y)
+                self._prev_y[hand_no] = average_y
+                return Gesture.NONE
+
+        if self._prev_y[hand_no] is not None:
             # Swipe-drop cooldown — suppress soft drops briefly after a swipe
             if self._swipe_drop_cooldown[hand_no] > 0:
                 self._swipe_drop_cooldown[hand_no] -= 1
