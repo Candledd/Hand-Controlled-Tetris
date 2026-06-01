@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from dataclasses import dataclass
 
 import cv2
@@ -80,7 +82,7 @@ class HandTracker:
             min_hand_presence_confidence=presence_confidence,
         )
         self._landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
-        self._frame_timestamp_ms = 0
+        self._start_time_ms: float = time.monotonic() * 1000
         self._hands: list[HandData] = []
 
     def find_hands(self, img: np.ndarray, draw: bool = True) -> tuple[np.ndarray, list[HandData]]:
@@ -88,8 +90,8 @@ class HandTracker:
         height, width = img.shape[:2]
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-        detection_result = self._landmarker.detect_for_video(mp_image, self._frame_timestamp_ms)
-        self._frame_timestamp_ms += 33
+        timestamp_ms = int(time.monotonic() * 1000 - self._start_time_ms)
+        detection_result = self._landmarker.detect_for_video(mp_image, timestamp_ms)
 
         self._hands = self._parse_hands(detection_result, width, height)
 

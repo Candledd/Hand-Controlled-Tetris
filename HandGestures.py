@@ -1,11 +1,3 @@
-"""
-To add a gesture:
-  1. Add a value to `Gesture`.
-  2. Map it in `GESTURE_ACTIONS`.
-  3. Implement a `_detect_*` method on `GestureDetector`.
-  4. Call that method from `GestureDetector.update()`.
-"""
-
 from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
@@ -108,6 +100,7 @@ def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
         (0, 255, 255),
         2,
     )
+
 
 class GestureDetector:
     """Converts `HandData` lists into `GestureState` for frame."""
@@ -280,6 +273,11 @@ class GestureDetector:
 
     def _detect_swipe(self, hand: HandData, hand_no: int,
                       hand_wrist_x: float, prev_wrist_x: float | None) -> Gesture:
+        # NOTE: Swipe direction is intentionally mirrored.
+        # MediaPipe reports "Right" for the hand on the right of the *camera's* frame,
+        # but since the webcam image is flipped horizontally for the player,
+        # a positive wrist_x velocity (moving right in camera-space) corresponds to
+        # the player moving their hand LEFT on-screen.
         # Gate: if the hand is moving downward significantly (dropping),
         # suppress swipe detection (uses y-history from _detect_drop)
         y_history = self._y_history.get(hand_no)
@@ -368,6 +366,7 @@ class GestureDetector:
                 return Gesture.NONE
 
             # Soft drop — continuous per-frame velocity
+            velocity = average_y - self._prev_y[hand_no]
             if velocity >= self._soft_drop_velocity_threshold:
                 history.append(average_y)
                 self._prev_y[hand_no] = average_y
@@ -386,37 +385,38 @@ def main(camera_index: int = 0) -> None:
     prev_time = 0.0
     detector = GestureDetector()
 
-    with HandTracker(max_hands=2) as tracker:
-        while True:
-            success, img = cap.read()
-            if not success:
-                break
+    try:
+        with HandTracker(max_hands=2) as tracker:
+            while True:
+                success, img = cap.read()
+                if not success:
+                    break
 
-            img, hands = tracker.find_hands(img)
-            img = tracker.label_hands(img)
-            state = detector.update(hands)
-            draw_gesture_overlay(img, state)
+                img, hands = tracker.find_hands(img)
+                img = tracker.label_hands(img)
+                state = detector.update(hands)
+                draw_gesture_overlay(img, state)
 
-            curr_time = time.time()
-            dt = curr_time - prev_time
-            fps = int(1 / dt) if dt > 0 else 0
-            prev_time = curr_time
-            cv2.putText(
-                img,
-                str(fps),
-                (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                1,
-            )
+                curr_time = time.time()
+                dt = curr_time - prev_time
+                fps = int(1 / dt) if dt > 1e-6 else 0
+                prev_time = curr_time
+                cv2.putText(
+                    img,
+                    str(fps),
+                    (10, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    1,
+                )
 
-            cv2.imshow("Hand Gestures", img)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-    cap.release()
-    cv2.destroyAllWindows()
+                cv2.imshow("Hand Gestures", img)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
