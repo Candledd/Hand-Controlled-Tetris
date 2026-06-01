@@ -13,6 +13,7 @@ from enum import Enum
 
 import cv2
 import time
+import numpy as np
 
 from HandTrackingModule import HandData, HandTracker
 
@@ -63,31 +64,35 @@ GESTURE_ACTIONS: dict[Gesture, str] = {
 }
 
 
-"""Init"""
+# Init
 @dataclass
 class GestureState:
     gesture: Gesture = Gesture.NONE
-    actions: dict[str, bool] = field(default_factory=dict)
+    actions: dict[str, bool] = field(
+        default_factory=lambda: {name: False for name in ALL_ACTIONS}
+    )
 
-    #filters list into only gestures that == true.
     @property
     def active_actions(self) -> list[str]:
         return [name for name, pressed in self.actions.items() if pressed]
 
-"""Ensures only one gesture is true, turns everything else false"""
+
 def actions_for_gesture(gesture: Gesture) -> dict[str, bool]:
+    """Ensure only one gesture is true, turns everything else false."""
     actions = {name: False for name in ALL_ACTIONS}
     action = GESTURE_ACTIONS.get(gesture)
     if action:
         actions[action] = True
     return actions
 
-"""Draws overlay: Gesture + Action"""
-def draw_gesture_overlay(img, state: GestureState) -> None:
+
+def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
+    """Draw overlay: Gesture + Action."""
+    h, w = img.shape[:2]
     cv2.putText(
         img,
         f"Gesture: {state.gesture.value}",
-        (10, 70),
+        (int(w * 0.02), int(h * 0.08)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
@@ -97,15 +102,16 @@ def draw_gesture_overlay(img, state: GestureState) -> None:
     cv2.putText(
         img,
         f"Actions: {label}",
-        (10, 100),
+        (int(w * 0.02), int(h * 0.12)),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
         2,
     )
 
-"""Converts `HandData` lists into `GestureState` for frame."""
 class GestureDetector:
+    """Converts `HandData` lists into `GestureState` for frame."""
+
     def __init__(
         self,
         fist_curled_threshold: float = 0.06,
@@ -129,11 +135,9 @@ class GestureDetector:
         self._drop_history_frames = drop_history_frames
         self._y_history: dict[int, deque[float]] = {}
         self._prev_y: dict[int, float | None] = {}
-        self._prev_x: dict[int, float | None] = {}
+        self._prev_wrist_x: dict[int, float | None] = {}
         self._hard_drop_cooldown: dict[int, int] = {}
         self._hard_drop_cooldown_frames: int = hard_drop_cooldown
-        self._x_history: dict[int, deque[float]] = {}
-        self._last_x: dict[int, float | None] = {}
         self._swipe_history_frames: int = swipe_history_frames
         self._swipe_drop_cooldown: dict[int, int] = {}
         self._swipe_drop_cooldown_frames: int = 8
@@ -154,19 +158,17 @@ class GestureDetector:
         self._swipe_velocity_threshold = swipe_threshold / swipe_history_frames * 0.5
         self._soft_drop_velocity_threshold = soft_drop_threshold / drop_history_frames * 0.5
 
-    """Looks for detection based on current frame"""
     def update(self, hands: list[HandData]) -> GestureState:
+        """Looks for detection based on current frame."""
         # Clean up state for hands no longer present
         present = set(range(len(hands)))
         for hand_id in list(self._y_history.keys()):
             if hand_id not in present:
                 self._y_history.pop(hand_id, None)
                 self._prev_y.pop(hand_id, None)
-                self._prev_x.pop(hand_id, None)
+                self._prev_wrist_x.pop(hand_id, None)
                 self._hard_drop_cooldown.pop(hand_id, None)
                 self._swipe_drop_cooldown.pop(hand_id, None)
-                self._x_history.pop(hand_id, None)
-                self._last_x.pop(hand_id, None)
                 self._prev_wrist.pop(hand_id, None)
                 self._wrist_velocities.pop(hand_id, None)
                 self._curled_count.pop(hand_id, None)
@@ -184,11 +186,14 @@ class GestureDetector:
             wrist_x = hand.landmarks_norm[WRIST][0]
             wrist_y = hand.landmarks_norm[WRIST][1]
 
-            gesture = self._detect_drop(hand, hand_no, wrist_x, wrist_y)
+            prev_wrist_x = self._prev_wrist_x.get(hand_no)
+            self._prev_wrist_x[hand_no] = wrist_x
+
+            gesture = self._detect_drop(hand, hand_no, wrist_x, wrist_y, prev_wrist_x)
             if gesture is Gesture.NONE:
                 gesture = self._detect_fist(hand, hand_no)
             if gesture is Gesture.NONE:
-                gesture = self._detect_swipe(hand, hand_no, wrist_x)
+                gesture = self._detect_swipe(hand, hand_no, wrist_x, prev_wrist_x)
 
             gesture = self._debounce_gesture(hand_no, gesture)
 
@@ -207,10 +212,8 @@ class GestureDetector:
     def reset(self) -> None:
         self._y_history.clear()
         self._prev_y.clear()
-        self._prev_x.clear()
+        self._prev_wrist_x.clear()
         self._hard_drop_cooldown.clear()
-        self._x_history.clear()
-        self._last_x.clear()
         self._swipe_drop_cooldown.clear()
         self._prev_wrist.clear()
         self._wrist_velocities.clear()
@@ -276,35 +279,23 @@ class GestureDetector:
         return Gesture.NONE
 
     def _detect_swipe(self, hand: HandData, hand_no: int,
-                      hand_wrist_x: float) -> Gesture:
-        # Initialize per-hand state on first sighting
-        if hand_no not in self._x_history:
-            self._x_history[hand_no] = deque(maxlen=self._swipe_history_frames)
-            self._last_x[hand_no] = None
-
-        average_x = hand_wrist_x
-        history = self._x_history[hand_no]
-
+                      hand_wrist_x: float, prev_wrist_x: float | None) -> Gesture:
         # Gate: if the hand is moving downward significantly (dropping),
         # suppress swipe detection (uses y-history from _detect_drop)
         y_history = self._y_history.get(hand_no)
         if y_history is not None and len(y_history) >= 2:
             y_velocity = abs(y_history[-1] - y_history[-2])
             if y_velocity >= self._vertical_gate:
-                history.append(average_x)
-                self._last_x[hand_no] = average_x
                 return Gesture.NONE
 
         # Gate: if 2+ fingers are curled, hand is forming a fist — suppress swipe
         if self._curled_count.get(hand_no, 0) >= 2:
-            history.append(average_x)
-            self._last_x[hand_no] = average_x
             return Gesture.NONE
 
         # Continuous per-frame velocity: fires every frame the hand moves
         # in the allowed direction above threshold (no cooldown)
-        if self._last_x[hand_no] is not None:
-            velocity = average_x - self._last_x[hand_no]
+        if prev_wrist_x is not None:
+            velocity = hand_wrist_x - prev_wrist_x
             is_right = hand.handedness == "Right"
 
             gesture = Gesture.NONE
@@ -316,21 +307,17 @@ class GestureDetector:
             if gesture is not Gesture.NONE:
                 self._swipe_drop_cooldown[hand_no] = self._swipe_drop_cooldown_frames
 
-            self._last_x[hand_no] = average_x
-            history.append(average_x)
             return gesture
 
-        self._last_x[hand_no] = average_x
-        history.append(average_x)
         return Gesture.NONE
 
     def _detect_drop(self, hand: HandData, hand_no: int,
-                     hand_wrist_x: float, hand_wrist_y: float) -> Gesture:
+                     hand_wrist_x: float, hand_wrist_y: float,
+                     prev_wrist_x: float | None) -> Gesture:
         # Initialize per-hand state on first sighting
         if hand_no not in self._y_history:
             self._y_history[hand_no] = deque(maxlen=self._drop_history_frames)
             self._prev_y[hand_no] = None
-            self._prev_x[hand_no] = None
             self._hard_drop_cooldown[hand_no] = 0
             self._swipe_drop_cooldown[hand_no] = 0
 
@@ -340,16 +327,12 @@ class GestureDetector:
 
         # Gate: if hand is moving sideways with significant speed (swiping),
         # suppress all drop detection to avoid accidental wrist-extension drops
-        if self._prev_x[hand_no] is not None:
-            x_velocity = abs(average_x - self._prev_x[hand_no])
+        if prev_wrist_x is not None:
+            x_velocity = abs(average_x - prev_wrist_x)
             if x_velocity >= self._horizontal_gate:
                 history.append(average_y)
                 self._prev_y[hand_no] = average_y
-                self._prev_x[hand_no] = average_x
-                self._swipe_drop_cooldown[hand_no] = self._swipe_drop_cooldown_frames
                 return Gesture.NONE
-
-        self._prev_x[hand_no] = average_x
 
         # Hard drop cooldown — completely blocks all drop detection
         if self._hard_drop_cooldown[hand_no] > 0:
@@ -393,9 +376,13 @@ class GestureDetector:
         history.append(average_y)
         return Gesture.NONE
 
-def main() -> None:
-    cap = cv2.VideoCapture(0)
-    pTime = 0
+def main(camera_index: int = 0) -> None:
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        print(f"Error: Could not open camera {camera_index}")
+        return
+
+    prev_time = 0.0
     detector = GestureDetector()
 
     with HandTracker(max_hands=2) as tracker:
@@ -408,14 +395,14 @@ def main() -> None:
             img = tracker.label_hands(img)
             state = detector.update(hands)
             draw_gesture_overlay(img, state)
-            
 
-            cTime = time.time()
-            fps = 1 / (cTime - pTime) if pTime else 0
-            pTime = cTime
+            curr_time = time.time()
+            dt = curr_time - prev_time
+            fps = int(1 / dt) if dt > 0 else 0
+            prev_time = curr_time
             cv2.putText(
                 img,
-                str(int(fps)),
+                str(fps),
                 (10, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
