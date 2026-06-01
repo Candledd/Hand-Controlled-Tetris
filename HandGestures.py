@@ -8,8 +8,6 @@ To add a gesture:
 
 from __future__ import annotations
 from collections import deque
-
-import math
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -121,6 +119,7 @@ class GestureDetector:
         pitch_forward_cutoff: float = -0.08,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
+        self._fist_curled_threshold_sq = fist_curled_threshold ** 2
         self.min_curled_fingers = min_curled_fingers
         self.hard_drop_velocity = hard_drop_velocity
         self.soft_drop_threshold = soft_drop_threshold
@@ -139,6 +138,7 @@ class GestureDetector:
         self._swipe_drop_cooldown: dict[int, int] = {}
         self._swipe_drop_cooldown_frames: int = 8
         self._prev_wrist: dict[int, tuple[float, float] | None] = {}
+        self._wrist_velocities: dict[int, deque[float]] = {}
         self._curled_count: dict[int, int] = {}
         self._last_hand_gesture: dict[int, Gesture] = {}
         self._gesture_settle_cooldown: dict[int, int] = {}
@@ -165,11 +165,10 @@ class GestureDetector:
                 self._prev_x.pop(hand_id, None)
                 self._hard_drop_cooldown.pop(hand_id, None)
                 self._swipe_drop_cooldown.pop(hand_id, None)
-        for hand_id in list(self._x_history.keys()):
-            if hand_id not in present:
                 self._x_history.pop(hand_id, None)
                 self._last_x.pop(hand_id, None)
                 self._prev_wrist.pop(hand_id, None)
+                self._wrist_velocities.pop(hand_id, None)
                 self._curled_count.pop(hand_id, None)
                 self._last_hand_gesture.pop(hand_id, None)
                 self._gesture_settle_cooldown.pop(hand_id, None)
@@ -181,21 +180,24 @@ class GestureDetector:
         last_gesture = Gesture.NONE
 
         for hand_no, hand in enumerate(hands):
-            gesture = self._detect_drop(hand, hand_no)
+            self._update_finger_states(hand, hand_no)
+            wrist_x = hand.landmarks_norm[WRIST][0]
+            wrist_y = hand.landmarks_norm[WRIST][1]
+
+            gesture = self._detect_drop(hand, hand_no, wrist_x, wrist_y)
             if gesture is Gesture.NONE:
                 gesture = self._detect_fist(hand, hand_no)
             if gesture is Gesture.NONE:
-                gesture = self._detect_swipe(hand, hand_no)
+                gesture = self._detect_swipe(hand, hand_no, wrist_x)
 
             gesture = self._debounce_gesture(hand_no, gesture)
 
             if gesture is not Gesture.NONE:
                 if last_gesture is Gesture.NONE:
                     last_gesture = gesture
-                actions = actions_for_gesture(gesture)
-                for name in ALL_ACTIONS:
-                    if actions[name]:
-                        combined_actions[name] = True
+                action = GESTURE_ACTIONS.get(gesture)
+                if action:
+                    combined_actions[action] = True
 
         return GestureState(
             gesture=last_gesture,
@@ -211,16 +213,10 @@ class GestureDetector:
         self._last_x.clear()
         self._swipe_drop_cooldown.clear()
         self._prev_wrist.clear()
+        self._wrist_velocities.clear()
         self._curled_count.clear()
         self._last_hand_gesture.clear()
         self._gesture_settle_cooldown.clear()
-
-    @staticmethod
-    def _delta_over_window(history: deque[float]) -> float | None:
-        """Return newest - oldest once the deque is full; otherwise None."""
-        if len(history) < history.maxlen:
-            return None
-        return history[-1] - history[0]
 
     def _debounce_gesture(self, hand_no: int, gesture: Gesture) -> Gesture:
         prev = self._last_hand_gesture.get(hand_no, Gesture.NONE)
@@ -239,16 +235,33 @@ class GestureDetector:
         self._last_hand_gesture[hand_no] = gesture
         return gesture
 
+    def _update_finger_states(self, hand: HandData, hand_no: int) -> None:
+        curled_count = 0
+        for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
+            tip = hand.landmarks_norm[tip_idx]
+            mcp = hand.landmarks_norm[mcp_idx]
+            dx = tip[0] - mcp[0]
+            dy = tip[1] - mcp[1]
+            if dx * dx + dy * dy < self._fist_curled_threshold_sq:
+                curled_count += 1
+        self._curled_count[hand_no] = curled_count
+
     def _detect_fist(self, hand: HandData, hand_no: int) -> Gesture:
         wrist = hand.landmarks_norm[WRIST]
         wrist_x, wrist_y = wrist[0], wrist[1]
 
-        # During motion, require one more curled finger to trigger fist
         min_needed = self.min_curled_fingers
+
+        # Smoothed motion gate — average velocity over 2 frame gaps
+        if hand_no not in self._wrist_velocities:
+            self._wrist_velocities[hand_no] = deque(maxlen=2)
+
         if hand_no in self._prev_wrist and self._prev_wrist[hand_no] is not None:
             prev_x, prev_y = self._prev_wrist[hand_no]
             velocity = abs(wrist_x - prev_x) + abs(wrist_y - prev_y)
-            if velocity >= self._soft_drop_velocity_threshold * 2:
+            self._wrist_velocities[hand_no].append(velocity)
+            avg_v = sum(self._wrist_velocities[hand_no]) / len(self._wrist_velocities[hand_no])
+            if avg_v >= self._soft_drop_velocity_threshold * 2:
                 min_needed += 1
 
         # When fingers pitch toward the camera (z is negative), require more curled
@@ -258,28 +271,18 @@ class GestureDetector:
 
         self._prev_wrist[hand_no] = (wrist_x, wrist_y)
 
-        curled_count = 0
-        for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
-            tip = hand.landmarks_norm[tip_idx]
-            mcp = hand.landmarks_norm[mcp_idx]
-            distance = math.hypot(tip[0] - mcp[0], tip[1] - mcp[1])
-
-            if distance < self.fist_curled_threshold:
-                curled_count += 1
-
-        self._curled_count[hand_no] = curled_count
-
-        if curled_count >= min_needed:
+        if self._curled_count.get(hand_no, 0) >= min_needed:
             return Gesture.FIST
         return Gesture.NONE
 
-    def _detect_swipe(self, hand: HandData, hand_no: int) -> Gesture:
+    def _detect_swipe(self, hand: HandData, hand_no: int,
+                      hand_wrist_x: float) -> Gesture:
         # Initialize per-hand state on first sighting
         if hand_no not in self._x_history:
             self._x_history[hand_no] = deque(maxlen=self._swipe_history_frames)
             self._last_x[hand_no] = None
 
-        average_x = sum(lm[0] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
+        average_x = hand_wrist_x
         history = self._x_history[hand_no]
 
         # Gate: if the hand is moving downward significantly (dropping),
@@ -321,7 +324,8 @@ class GestureDetector:
         history.append(average_x)
         return Gesture.NONE
 
-    def _detect_drop(self, hand: HandData, hand_no: int) -> Gesture:
+    def _detect_drop(self, hand: HandData, hand_no: int,
+                     hand_wrist_x: float, hand_wrist_y: float) -> Gesture:
         # Initialize per-hand state on first sighting
         if hand_no not in self._y_history:
             self._y_history[hand_no] = deque(maxlen=self._drop_history_frames)
@@ -330,8 +334,8 @@ class GestureDetector:
             self._hard_drop_cooldown[hand_no] = 0
             self._swipe_drop_cooldown[hand_no] = 0
 
-        average_y = sum(lm[1] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
-        average_x = sum(lm[0] for lm in hand.landmarks_norm) / len(hand.landmarks_norm)
+        average_y = hand_wrist_y
+        average_x = hand_wrist_x
         history = self._y_history[hand_no]
 
         # Gate: if hand is moving sideways with significant speed (swiping),
@@ -388,12 +392,6 @@ class GestureDetector:
         self._prev_y[hand_no] = average_y
         history.append(average_y)
         return Gesture.NONE
-
-
-
-
-
-
 
 def main() -> None:
     cap = cv2.VideoCapture(0)
