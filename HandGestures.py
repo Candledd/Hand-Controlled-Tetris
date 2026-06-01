@@ -111,14 +111,15 @@ class GestureDetector:
         self,
         fist_curled_threshold: float = 0.09,
         min_curled_fingers: int = 4,
-        hard_drop_velocity: float = 0.05,
-        soft_drop_threshold: float = 0.055,
+        hard_drop_velocity: float = 0.035,
+        soft_drop_threshold: float = 0.06,
         drop_velocity_divisor: int = 6,
         hard_drop_cooldown: int = 15,
         swipe_threshold: float = 0.075,
         swipe_velocity_divisor: int = 5,
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
+        ema_alpha: float = 0.5,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -128,6 +129,10 @@ class GestureDetector:
         self.swipe_threshold = swipe_threshold
         self._z_weight = z_weight
         self._palm_tilt_threshold = palm_tilt_threshold
+
+        # alpha=1.0 means no smoothing (raw), alpha=0.0 means fully lagged.
+        self._ema_alpha = ema_alpha
+        self._smoothed_wrist: dict[int, tuple[float, float]] = {}
 
         self._y_history: dict[int, deque[float]] = {}
         self._prev_y: dict[int, float | None] = {}
@@ -172,6 +177,7 @@ class GestureDetector:
                 self._last_hand_gesture.pop(hand_id, None)
                 self._gesture_settle_cooldown.pop(hand_id, None)
                 self._swipe_confirm_count.pop(hand_id, None)
+                self._smoothed_wrist.pop(hand_id, None)
 
         if not hands:
             return GestureState(actions=actions_for_gesture(Gesture.NONE))
@@ -181,8 +187,19 @@ class GestureDetector:
 
         for hand_no, hand in enumerate(hands):
             self._update_finger_states(hand, hand_no)
-            wrist_x = hand.landmarks_norm[WRIST][0]
-            wrist_y = hand.landmarks_norm[WRIST][1]
+            raw_x = hand.landmarks_norm[WRIST][0]
+            raw_y = hand.landmarks_norm[WRIST][1]
+
+            # Apply EMA smoothing to wrist position
+            if hand_no in self._smoothed_wrist:
+                prev_sx, prev_sy = self._smoothed_wrist[hand_no]
+                a = self._ema_alpha
+                wrist_x = a * raw_x + (1.0 - a) * prev_sx
+                wrist_y = a * raw_y + (1.0 - a) * prev_sy
+            else:
+                wrist_x = raw_x
+                wrist_y = raw_y
+            self._smoothed_wrist[hand_no] = (wrist_x, wrist_y)
 
             prev_wrist_x = self._prev_wrist_x.get(hand_no)
             self._prev_wrist_x[hand_no] = wrist_x
@@ -219,6 +236,7 @@ class GestureDetector:
         self._last_hand_gesture.clear()
         self._gesture_settle_cooldown.clear()
         self._swipe_confirm_count.clear()
+        self._smoothed_wrist.clear()
 
     def _debounce_gesture(self, hand_no: int, gesture: Gesture) -> Gesture:
         prev = self._last_hand_gesture.get(hand_no, Gesture.NONE)
