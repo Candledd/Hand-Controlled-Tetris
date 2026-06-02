@@ -163,6 +163,12 @@ class GestureDetector:
         self._swipe_velocity_threshold = swipe_threshold / swipe_velocity_divisor * 0.39
         self._soft_drop_velocity_threshold = soft_drop_threshold / drop_velocity_divisor * 0.5
 
+    def __enter__(self) -> "GestureDetector":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        return None
+
     def update(self, hands: list[HandData]) -> GestureState:
         """Looks for detection based on current frame."""
         present = self._present_hand_keys(hands)

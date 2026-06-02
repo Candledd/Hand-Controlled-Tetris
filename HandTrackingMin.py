@@ -28,13 +28,8 @@ def main() -> None:
 
             img, hands = tracker.find_hands(img)
 
-            # if hands:
-            #     index_tip = tracker.find_position(hand_no=0, landmark_id=8)
-
-            cTime = time.time()
-            fps = 1 / (cTime - pTime) if pTime else 0
-            pTime = cTime
-            draw_fps(img, fps)
+            if hands:
+                index_tip = tracker.find_position(hand_no=0, landmark_id=8)
 
             cv2.imshow("Image", img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
