@@ -122,7 +122,7 @@ class GestureDetector:
         swipe_velocity_divisor: int = 5,
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
-        ema_alpha: float = 0.45,
+        ema_alpha: float = 0.5,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -168,6 +168,10 @@ class GestureDetector:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         return None
+
+    @staticmethod
+    def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
+        draw_gesture_overlay(img, state)
 
     def update(self, hands: list[HandData]) -> GestureState:
         """Looks for detection based on current frame."""
