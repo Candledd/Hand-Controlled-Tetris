@@ -349,6 +349,11 @@ class GestureKeyboardDispatcher:
         unconditionally cleared, because the process is about to
         terminate and there is no caller that could act on a failure.
         """
+        for name in self._known:
+            was_active = self._prev.get(name, False)
+            if was_active and self._action_key_map.get(name, ()):
+                self._release_action(name)
+            self._prev[name] = False
 
     def pressed_actions(self) -> list[str]:
         """Return the action names currently considered 'pressed'.
@@ -362,11 +367,6 @@ class GestureKeyboardDispatcher:
     def pressed_keys_for(self, action_name: str) -> tuple[KeyboardKey, ...]:
         """Return the key tuple mapped to `action_name` (empty if unmapped)."""
         return self._action_key_map.get(action_name, ())
-        for action_name in self._known:
-            was_active = self._prev.get(action_name, False)
-            if was_active:
-                self._release_action(action_name)
-            self._prev[action_name] = False
 
     def _press_action(self, action_name: str) -> bool:
         """Press all keys for `action_name`. True iff every key was sent.
@@ -510,7 +510,8 @@ def main(camera_index: int = 0) -> None:
         )
 
         keyboard = Win32Keyboard()
-        dispatcher = GestureKeyboardDispatcher(keyboard)
+        from GameLogic import TetrisKeyboardDispatcher
+        dispatcher = TetrisKeyboardDispatcher(keyboard)
 
         try:
             with HandTracker(max_hands=2) as tracker:
