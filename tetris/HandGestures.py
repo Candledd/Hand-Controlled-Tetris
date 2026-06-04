@@ -156,6 +156,12 @@ class GestureDetector:
         self._swipe_confirm_count: dict[HandKey, int] = {}
         self._swipe_confirm_needed: int = 1
 
+        # Adaptive deadzone: scales the opposite-axis threshold down
+        # based on how many consecutive frames the current action is sustained.
+        self._active_gesture_frames: dict[HandKey, int] = {}
+        self._deadzone_max_frames: int = 20       # frames to reach maximum deadzone
+        self._deadzone_max_scale: float = 3.0     # at max, gate is 3x more restrictive
+
         # Axis-dominance gates: if the opposite axis exceeds this per-frame
         # velocity, the detector suppresses itself.  Prevents wrist-extension
         # during swipes from triggering drops, and vice versa.
@@ -219,6 +225,13 @@ class GestureDetector:
             gesture = self._debounce_gesture(hand_key, gesture)
 
             if gesture is not Gesture.NONE:
+                self._active_gesture_frames[hand_key] = (
+                    self._active_gesture_frames.get(hand_key, 0) + 1
+                )
+            else:
+                self._active_gesture_frames[hand_key] = 0
+
+            if gesture is not Gesture.NONE:
                 if last_gesture is Gesture.NONE:
                     last_gesture = gesture
                 action = GESTURE_ACTIONS.get(gesture)
@@ -257,6 +270,7 @@ class GestureDetector:
             self._gesture_settle_cooldown.pop(hand_key, None)
             self._swipe_confirm_count.pop(hand_key, None)
             self._smoothed_wrist.pop(hand_key, None)
+            self._active_gesture_frames.pop(hand_key, None)
 
     def reset(self) -> None:
         self._y_history.clear()
@@ -271,6 +285,13 @@ class GestureDetector:
         self._gesture_settle_cooldown.clear()
         self._swipe_confirm_count.clear()
         self._smoothed_wrist.clear()
+        self._active_gesture_frames.clear()
+
+    def _deadzone_scale(self, hand_key: HandKey) -> float:
+        """Return a multiplier >= 1.0 that grows with sustained gesture duration."""
+        frames = self._active_gesture_frames.get(hand_key, 0)
+        t = min(frames / self._deadzone_max_frames, 1.0)
+        return 1.0 + t * (self._deadzone_max_scale - 1.0)
 
     def _debounce_gesture(self, hand_key: HandKey, gesture: Gesture) -> Gesture:
         prev = self._last_hand_gesture.get(hand_key, Gesture.NONE)
@@ -385,7 +406,7 @@ class GestureDetector:
         y_history = self._y_history.get(hand_key)
         if y_history is not None and len(y_history) >= 2:
             y_velocity = abs(y_history[-1] - y_history[-2])
-            if y_velocity >= self._vertical_gate:
+            if y_velocity >= self._vertical_gate / self._deadzone_scale(hand_key):
                 self._swipe_confirm_count[hand_key] = 0
                 return Gesture.NONE
 
@@ -401,10 +422,12 @@ class GestureDetector:
             velocity = hand_wrist_x - prev_wrist_x
             is_right = hand.handedness == "Right"
 
+            scaled_swipe_threshold = self._swipe_velocity_threshold * self._deadzone_scale(hand_key)
+
             candidate = Gesture.NONE
-            if is_right and velocity >= self._swipe_velocity_threshold:
+            if is_right and velocity >= scaled_swipe_threshold:
                 candidate = Gesture.SWIPE_LEFT
-            elif not is_right and velocity <= -self._swipe_velocity_threshold:
+            elif not is_right and velocity <= -scaled_swipe_threshold:
                 candidate = Gesture.SWIPE_RIGHT
 
             if candidate is not Gesture.NONE:
@@ -460,7 +483,7 @@ class GestureDetector:
         # suppress soft drops to avoid accidental wrist-extension drops
         if prev_wrist_x is not None:
             x_velocity = abs(average_x - prev_wrist_x)
-            if x_velocity >= self._horizontal_gate:
+            if x_velocity >= self._horizontal_gate / self._deadzone_scale(hand_key):
                 history.append(average_y)
                 self._prev_y[hand_key] = average_y
                 return Gesture.NONE
@@ -481,7 +504,8 @@ class GestureDetector:
 
             # Soft drop — continuous per-frame velocity
             velocity = average_y - self._prev_y[hand_key]
-            if velocity >= self._soft_drop_velocity_threshold:
+            scaled_drop_threshold = self._soft_drop_velocity_threshold * self._deadzone_scale(hand_key)
+            if velocity >= scaled_drop_threshold:
                 history.append(average_y)
                 self._prev_y[hand_key] = average_y
                 return Gesture.SWIPE_DOWN_SLOW

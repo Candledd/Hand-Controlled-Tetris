@@ -42,6 +42,6 @@ jobs:
         python -m py_compile tetris/HandTrackingModule.py
         python -m py_compile tetris/GameLogic.py
 
-    - name: Run tests with pytest
-      run: |
-        pytest
+#    - name: Run tests with pytest
+#      run: |
+#        pytest

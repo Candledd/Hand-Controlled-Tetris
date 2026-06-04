@@ -1,5 +1,5 @@
 1. Improvements on continuation logic 
-    1.A: Deadzone on movements, increases in direction other than the one currently. e.g going down increases going left/right Deadzone scales based on duration of action
+    ✅ 1.A: Deadzone on movements, increases in direction other than the one currently. e.g going down increases going left/right Deadzone scales based on duration of action
     1.B: Markov Chain, should help with continuation guessing, might be hard to start it initially though.
         -> weigh fist less
     1.C: Moving both hands in a single direction should weigh more than one hand by itself
