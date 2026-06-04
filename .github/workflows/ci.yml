@@ -27,7 +27,7 @@ jobs:
 
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-glx libglib2.0-0
+        sudo apt-get install -y libgl1 libglib2.0-0
 
     - name: Install Python dependencies
       run: |
@@ -36,10 +36,11 @@ jobs:
 
     - name: Check syntax compilation
       run: |
-        python -m py_compile HandGestures.py
-        python -m py_compile GestureConversions.py
-        python -m py_compile HandTrackingModule.py
-        python -m py_compile GameLogic.py
+        python -m py_compile main.py
+        python -m py_compile tetris/HandGestures.py
+        python -m py_compile tetris/GestureConversions.py
+        python -m py_compile tetris/HandTrackingModule.py
+        python -m py_compile tetris/GameLogic.py
 
     - name: Run tests with pytest
       run: |
