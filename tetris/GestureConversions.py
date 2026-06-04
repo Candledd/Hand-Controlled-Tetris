@@ -11,8 +11,9 @@ import cv2
 try:
     from tetris.HandGestures import (
         ACTION_HARD_DROP,
+        ACTION_HOLD,
         ACTION_LEFT,
-        ACTION_PAUSE,
+        ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
         ACTION_SOFT_DROP,
@@ -24,8 +25,9 @@ try:
 except ModuleNotFoundError:
     from HandGestures import (
         ACTION_HARD_DROP,
+        ACTION_HOLD,
         ACTION_LEFT,
-        ACTION_PAUSE,
+        ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
         ACTION_SOFT_DROP,
@@ -55,8 +57,9 @@ class KeyboardKey(Enum):
     NUMPAD6 = 0x66   # VK_NUMPAD6
     NUMPAD8 = 0x68   # VK_NUMPAD8
     NUMPAD9 = 0x69   # VK_NUMPAD9
-    P = 0x50         # VK_P  (used for ACTION_PAUSE)
-
+    R = 0x52         # VK_R  (used for ACTION_RETRY)
+    C = 0x43         # VK_C
+    SHIFT = 0x10     # VK_SHIFT
 
 # Action → list of keys to press when the action becomes active.
 # The two-key per action matches the original comment table exactly.
@@ -66,7 +69,8 @@ ACTION_KEY_MAP: dict[str, tuple[KeyboardKey, ...]] = {
     ACTION_ROTATE:     (KeyboardKey.UP,    KeyboardKey.NUMPAD9),
     ACTION_HARD_DROP:  (KeyboardKey.SPACE, KeyboardKey.NUMPAD8),
     ACTION_SOFT_DROP:  (KeyboardKey.DOWN,  KeyboardKey.NUMPAD2),
-    ACTION_PAUSE:      (KeyboardKey.P,),
+    ACTION_RETRY:      (KeyboardKey.R,),
+    ACTION_HOLD:       (KeyboardKey.SHIFT, KeyboardKey.C),
 }
 
 
@@ -431,7 +435,7 @@ _PRETTY_KEY_NAMES: dict[KeyboardKey, str] = {
     KeyboardKey.RIGHT: "Right",
     KeyboardKey.DOWN: "Down",
     KeyboardKey.SPACE: "Space",
-    KeyboardKey.P: "P",
+    KeyboardKey.R: "R",
     KeyboardKey.NUMPAD2: "Numpad 2",
     KeyboardKey.NUMPAD4: "Numpad 4",
     KeyboardKey.NUMPAD6: "Numpad 6",

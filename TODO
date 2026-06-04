@@ -1,13 +1,23 @@
 1. Improvements on continuation logic 
-    ✅ 1.A: Deadzone on movements, increases in direction other than the one currently. e.g going down increases going left/right Deadzone scales based on duration of action
-    1.B: Markov Chain, should help with continuation guessing, might be hard to start it initially though.
+    ✔️1.A: Deadzone on movements, increases in direction other than the one currently. e.g going down increases going left/right Deadzone scales based on duration of action
+    ❓1.B: Markov Chain, should help with continuation guessing, might be hard to start it initially though.
         -> weigh fist less
-    1.C: Moving both hands in a single direction should weigh more than one hand by itself
+        -> diminishing returns
+        -> different branch after everything else is done
+    ❓1.C: Moving both hands in a single direction should weigh more than one hand by itself
         -> not sure how to work with swipes since if we swipe right, we have to swipe left to center out hands on the camera.
+        -> could add a recenter calibration, but would probably break if we're trying to readjust if we go too far right. 
+        -> differnet branch after everything else is done
     1.D: Tuning, inside both HandGestures.py and GestureLogic.py
+        -> ARR/DAS
+        -> Normalize swipes based on length of a tetris board rather than raw inputs, rate control between detection and action
+        -> flat out decimal optimizations
 2. Increase interactibility
-    2.A: Add pause : peace sign(?)
+    ✔️ 2.A: Add retry : peace sign(?)
     2.B: Rotate clockwise and counterclockwise based on which hand closes.
+        -> Current both clockwise, counterclockwise button : ctrl and z
     2.C: Add hold piece : (?) no clue what to put as hold piece
 3. Make exe
-4. 
+4. Create a camera initlization period when launching where user can mark where they usually place their hands to remember the (x, y, z) and judge distance from that position for finer movements
+    -> Drift, camera positions, mediapipe depth is iffy
+    -> periodic re-calibration, tedious and impractical

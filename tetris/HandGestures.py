@@ -34,7 +34,8 @@ ACTION_RIGHT = "right"
 ACTION_ROTATE = "rotate"
 ACTION_HARD_DROP = "hard_drop"
 ACTION_SOFT_DROP = "soft_drop"
-ACTION_PAUSE = "pause"
+ACTION_RETRY = "retry"
+ACTION_HOLD = "hold"
 
 ALL_ACTIONS: tuple[str, ...] = (
     ACTION_LEFT,
@@ -42,7 +43,8 @@ ALL_ACTIONS: tuple[str, ...] = (
     ACTION_ROTATE,
     ACTION_HARD_DROP,
     ACTION_SOFT_DROP,
-    ACTION_PAUSE,
+    ACTION_RETRY,
+    ACTION_HOLD,
 )
 
 
@@ -53,6 +55,8 @@ class Gesture(Enum):
     FIST = "fist"
     SWIPE_DOWN_FAST = "swipe_down_fast"
     SWIPE_DOWN_SLOW = "swipe_down_slow"
+    PEACE = "peace"
+    ROCK = "rock"
 
 
 GESTURE_ACTIONS: dict[Gesture, str] = {
@@ -61,6 +65,8 @@ GESTURE_ACTIONS: dict[Gesture, str] = {
     Gesture.FIST: ACTION_ROTATE,
     Gesture.SWIPE_DOWN_FAST: ACTION_HARD_DROP,
     Gesture.SWIPE_DOWN_SLOW: ACTION_SOFT_DROP,
+    Gesture.PEACE: ACTION_HOLD,
+    Gesture.ROCK: ACTION_RETRY,
 }
 
 
@@ -150,11 +156,18 @@ class GestureDetector:
         self._prev_wrist: dict[HandKey, tuple[float, float] | None] = {}
         self._wrist_velocities: dict[HandKey, deque[float]] = {}
         self._curled_count: dict[HandKey, int] = {}
+        self._finger_curled: dict[HandKey, tuple[bool, ...]] = {}
         self._last_hand_gesture: dict[HandKey, Gesture] = {}
         self._gesture_settle_cooldown: dict[HandKey, int] = {}
         self._gesture_settle_cooldown_frames: int = 5
         self._swipe_confirm_count: dict[HandKey, int] = {}
         self._swipe_confirm_needed: int = 1
+        self._fist_confirm_count: dict[HandKey, int] = {}
+        self._fist_confirm_needed: int = 3
+        self._peace_confirm_count: dict[HandKey, int] = {}
+        self._peace_confirm_needed: int = 3
+        self._rock_confirm_count: dict[HandKey, int] = {}
+        self._rock_confirm_needed: int = 5
 
         # Adaptive deadzone: scales the opposite-axis threshold down
         # based on how many consecutive frames the current action is sustained.
@@ -220,6 +233,10 @@ class GestureDetector:
             if gesture is Gesture.NONE:
                 gesture = self._detect_fist(hand, hand_key)
             if gesture is Gesture.NONE:
+                gesture = self._detect_peace(hand_key)
+            if gesture is Gesture.NONE:
+                gesture = self._detect_rock(hand_key)
+            if gesture is Gesture.NONE:
                 gesture = self._detect_swipe(hand, hand_key, wrist_x, prev_wrist_x)
 
             gesture = self._debounce_gesture(hand_key, gesture)
@@ -266,9 +283,13 @@ class GestureDetector:
             self._prev_wrist.pop(hand_key, None)
             self._wrist_velocities.pop(hand_key, None)
             self._curled_count.pop(hand_key, None)
+            self._finger_curled.pop(hand_key, None)
             self._last_hand_gesture.pop(hand_key, None)
             self._gesture_settle_cooldown.pop(hand_key, None)
             self._swipe_confirm_count.pop(hand_key, None)
+            self._fist_confirm_count.pop(hand_key, None)
+            self._peace_confirm_count.pop(hand_key, None)
+            self._rock_confirm_count.pop(hand_key, None)
             self._smoothed_wrist.pop(hand_key, None)
             self._active_gesture_frames.pop(hand_key, None)
 
@@ -281,9 +302,13 @@ class GestureDetector:
         self._prev_wrist.clear()
         self._wrist_velocities.clear()
         self._curled_count.clear()
+        self._finger_curled.clear()
         self._last_hand_gesture.clear()
         self._gesture_settle_cooldown.clear()
         self._swipe_confirm_count.clear()
+        self._fist_confirm_count.clear()
+        self._peace_confirm_count.clear()
+        self._rock_confirm_count.clear()
         self._smoothed_wrist.clear()
         self._active_gesture_frames.clear()
 
@@ -312,15 +337,19 @@ class GestureDetector:
 
     def _update_finger_states(self, hand: HandData, hand_key: HandKey) -> None:
         curled_count = 0
+        states = []
         for tip_idx, mcp_idx in _FIST_TIP_MCP_PAIRS:
             tip = hand.landmarks_norm[tip_idx]
             mcp = hand.landmarks_norm[mcp_idx]
             dx = tip[0] - mcp[0]
             dy = tip[1] - mcp[1]
             dz = (tip[2] - mcp[2]) * self._z_weight
-            if dx * dx + dy * dy + dz * dz < self._fist_curled_threshold_sq:
+            is_curled = dx * dx + dy * dy + dz * dz < self._fist_curled_threshold_sq
+            states.append(is_curled)
+            if is_curled:
                 curled_count += 1
         self._curled_count[hand_key] = curled_count
+        self._finger_curled[hand_key] = tuple(states)
 
     @staticmethod
     def _compute_palm_normal_z(hand: HandData) -> float:
@@ -365,6 +394,7 @@ class GestureDetector:
         # Enforce a 90-degree upright cone (45 deg left/right).
         # If horizontal or pointing down, suppress fist.
         if up_dy < abs(up_dx):
+            self._fist_confirm_count[hand_key] = 0
             return Gesture.NONE
 
         min_needed = self.min_curled_fingers
@@ -395,8 +425,38 @@ class GestureDetector:
 
         self._prev_wrist[hand_key] = (wrist_x, wrist_y)
 
+        # ── Multi-frame confirmation ──
+        # Require the fist to be sustained for N consecutive frames
+        # before firing.  Filters transient curls from natural movement.
         if self._curled_count.get(hand_key, 0) >= min_needed:
-            return Gesture.FIST
+            count = self._fist_confirm_count.get(hand_key, 0) + 1
+            self._fist_confirm_count[hand_key] = count
+            if count >= self._fist_confirm_needed:
+                return Gesture.FIST
+            return Gesture.NONE
+
+        # Curl count dropped below threshold — reset confirmation
+        self._fist_confirm_count[hand_key] = 0
+        return Gesture.NONE
+
+    def _detect_peace(self, hand_key: HandKey) -> Gesture:
+        states = self._finger_curled.get(hand_key)
+        if not states or len(states) != 5:
+            return Gesture.NONE
+            
+        # Peace sign: Index(1) and Middle(2) UP (not curled). Thumb(0), Ring(3), Pinky(4) DOWN (curled).
+        if states[0] and not states[1] and not states[2] and states[3] and states[4]:
+            return Gesture.PEACE
+        return Gesture.NONE
+
+    def _detect_rock(self, hand_key: HandKey) -> Gesture:
+        states = self._finger_curled.get(hand_key)
+        if not states or len(states) != 5:
+            return Gesture.NONE
+            
+        # Rock sign: Index(1) and Pinky(4) UP (not curled). Thumb(0), Middle(2), Ring(3) DOWN (curled).
+        if states[0] and not states[1] and states[2] and states[3] and not states[4]:
+            return Gesture.ROCK
         return Gesture.NONE
 
     def _detect_swipe(self, hand: HandData, hand_key: HandKey,

@@ -12,8 +12,9 @@ try:
     )
     from tetris.HandGestures import (
         ACTION_HARD_DROP,
+        ACTION_HOLD,
         ACTION_LEFT,
-        ACTION_PAUSE,
+        ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
         ACTION_SOFT_DROP,
@@ -30,8 +31,9 @@ except ModuleNotFoundError:
     )
     from HandGestures import (
         ACTION_HARD_DROP,
+        ACTION_HOLD,
         ACTION_LEFT,
-        ACTION_PAUSE,
+        ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
         ACTION_SOFT_DROP,
@@ -51,7 +53,8 @@ TETRIS_ACTION_MODES: dict[str, ActionMode] = {
     ACTION_SOFT_DROP: ActionMode.CONTINUOUS,
     ACTION_ROTATE: ActionMode.SINGLE,
     ACTION_HARD_DROP: ActionMode.SINGLE,
-    ACTION_PAUSE: ActionMode.CONTINUOUS,
+    ACTION_RETRY: ActionMode.CONTINUOUS,
+    ACTION_HOLD: ActionMode.SINGLE,
 }
 
 

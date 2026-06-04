@@ -72,7 +72,7 @@ class HandTracker:
         max_hands: int = 2,
         detection_confidence: float = 0.7,
         presence_confidence: float = 0.7,
-        model_path: str = "hand_landmarker.task",
+        model_path: str = "tetris/hand_landmarker.task",
     ) -> None:
         options = mp.tasks.vision.HandLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path=model_path),

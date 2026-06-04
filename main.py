@@ -72,12 +72,8 @@ def main(camera_index: int = 0) -> None:
     dispatcher = TetrisKeyboardDispatcher(keyboard)
     model_path = os.path.join(script_dir, "tetris/hand_landmarker.task")
 
-    # Suppress verbose MediaPipe XNNPACK/TFLite delegate logs on initialization
     with suppress_stderr():
         tracker = HandTracker(max_hands=2, model_path=model_path)
-
-    last_action = None
-
     try:
         with tracker:
             with GestureDetector() as detector:
