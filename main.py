@@ -95,7 +95,9 @@ def main(camera_index: int = 0) -> None:
 
                     cv2.imshow("Hand Gestures", img)
 
-                    # Check for exit key
+                    # Break loop if the window is closed or ESC key is pressed
+                    if cv2.getWindowProperty("Hand Gestures", cv2.WND_PROP_VISIBLE) < 1:
+                        break
                     if cv2.waitKey(1) & 0xFF == 27:
                         break
     finally:
