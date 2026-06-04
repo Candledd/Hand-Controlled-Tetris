@@ -32,6 +32,9 @@ _FIST_TIP_MCP_PAIRS = (
 # Peace sign: thumb, ring, and pinky tips must be clustered together.
 _PEACE_TIP_INDICES = (4, 16, 20)
 
+# Rock sign: thumb, middle, and ring tips must be clustered together.
+_ROCK_TIP_INDICES = (4, 12, 16)
+
 ACTION_LEFT = "left"
 ACTION_RIGHT = "right"
 ACTION_ROTATE = "rotate"
@@ -134,7 +137,7 @@ class GestureDetector:
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
         ema_alpha: float = 0.5,
-        peace_tip_proximity: float = 0.1,
+        curled_tip_proximity: float = 0.15,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -147,7 +150,7 @@ class GestureDetector:
 
         # alpha=1.0 means no smoothing (raw), alpha=0.0 means fully lagged.
         self._ema_alpha = ema_alpha
-        self._peace_tip_proximity_sq = peace_tip_proximity ** 2
+        self._curled_tip_proximity_sq = curled_tip_proximity ** 2
         self._smoothed_wrist: dict[HandKey, tuple[float, float]] = {}
 
         self._y_history: dict[HandKey, deque[float]] = {}
@@ -235,7 +238,7 @@ class GestureDetector:
             if gesture is Gesture.NONE:
                 gesture = self._detect_peace(hand, hand_key)
             if gesture is Gesture.NONE:
-                gesture = self._detect_rock(hand_key)
+                gesture = self._detect_rock(hand, hand_key)
             if gesture is Gesture.NONE:
                 gesture = self._detect_swipe(hand, hand_key, wrist_x, prev_wrist_x)
 
@@ -428,7 +431,7 @@ class GestureDetector:
         # The three curled tips must be clustered together (peace: thumb tucked over the ring/pinky).
         tips = [hand.landmarks_norm[i] for i in _PEACE_TIP_INDICES]
         zw = self._z_weight
-        thresh = self._peace_tip_proximity_sq
+        thresh = self._curled_tip_proximity_sq
         for a, b in ((0, 1), (0, 2), (1, 2)):
             dx = tips[a][0] - tips[b][0]
             dy = tips[a][1] - tips[b][1]
@@ -437,15 +440,26 @@ class GestureDetector:
                 return Gesture.NONE
         return Gesture.PEACE
 
-    def _detect_rock(self, hand_key: HandKey) -> Gesture:
+    def _detect_rock(self, hand: HandData, hand_key: HandKey) -> Gesture:
         states = self._finger_curled.get(hand_key)
         if not states or len(states) != 5:
             return Gesture.NONE
 
-        # Rock: index + pinky up, others curled.
-        if states[0] and not states[1] and states[2] and states[3] and not states[4]:
-            return Gesture.ROCK
-        return Gesture.NONE
+        # Index + pinky up, thumb/middle/ring curled.
+        if not (states[0] and not states[1] and states[2] and states[3] and not states[4]):
+            return Gesture.NONE
+
+        # The three curled tips must be clustered together. (thumb tucked over middle/ring)
+        tips = [hand.landmarks_norm[i] for i in _ROCK_TIP_INDICES]
+        zw = self._z_weight
+        thresh = self._curled_tip_proximity_sq
+        for a, b in ((0, 1), (0, 2), (1, 2)):
+            dx = tips[a][0] - tips[b][0]
+            dy = tips[a][1] - tips[b][1]
+            dz = (tips[a][2] - tips[b][2]) * zw
+            if dx * dx + dy * dy + dz * dz >= thresh:
+                return Gesture.NONE
+        return Gesture.ROCK
 
     def _detect_swipe(self, hand: HandData, hand_key: HandKey,
                       hand_wrist_x: float, prev_wrist_x: float | None) -> Gesture:
