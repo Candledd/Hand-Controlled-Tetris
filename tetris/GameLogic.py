@@ -59,7 +59,7 @@ TETRIS_ACTION_MODES: dict[str, ActionMode] = {
 
 
 class TetrisKeyboardDispatcher(GestureKeyboardDispatcher):
-    """GestureKeyboardDispatcher variant with per-action mode + falling-edge grace.  """
+    """Per-action mode + falling-edge grace on top of the base dispatcher."""
     def __init__(
         self,
         keyboard: Win32Keyboard,
@@ -75,32 +75,16 @@ class TetrisKeyboardDispatcher(GestureKeyboardDispatcher):
         self._grace: dict[str, int] = {name: 0 for name in self._known}
 
     def dispatch(self, state: GestureState) -> None:
-        """Update held or sent keys to match the current action set.
+        """Update held/sent keys to match the current action set.
 
-        CONTINUOUS actions use the base dispatcher's press-on-rising,
-        release-on-falling logic, so the OS sees a held key and its
-        built-in autorepeat produces repeated events.
-
-        SINGLE actions fire a press+release on the rising edge and
-        then become inert for the rest of the gesture. The falling
-        edge clears the internal latch so the next rising edge fires
-        a fresh tap. This avoids the autorepeat that a held key
-        would produce, which is wrong for discrete actions like
-        rotate and hard-drop.
-
-        Both modes defer the actual release / latch-clear by up to
-        `grace_frames` frames. Any active frame resets the grace
-        counter to zero, so a single transient false negative in
-        the middle of a continuous slide does not interrupt the
-        OS's autorepeat or trigger a spurious re-fire. The
-        deferred release fires on the first frame after the grace
-        counter has been decremented to zero AND the input is
-        still inactive.
-
-        Partial-failure handling matches the base dispatcher: an
-        OS call that returns False leaves `self._prev[action_name]`
-        at its prior value, so the next frame retries the
-        transition instead of silently diverging from the OS.
+        CONTINUOUS actions use press-on-rising / release-on-falling so
+        OS autorepeat produces repeated events.
+        SINGLE actions tap press+release on the rising edge and stay
+        inert until the falling edge clears the latch, avoiding the
+        autorepeat that a held key would produce.
+        Both modes defer release / latch-clear by up to `grace_frames`
+        so a single false-negative frame mid-slide doesn't break
+        autorepeat or cause a spurious re-fire.
         """
         current = state.actions
         for action_name in self._known:
@@ -135,9 +119,8 @@ class TetrisKeyboardDispatcher(GestureKeyboardDispatcher):
 
 
 def main(camera_index: int = 0) -> None:
-    # All resources (camera, keyboard, dispatcher) are acquired inside
-    # this try-block so a failure to construct any of them still cleans
-    # up the ones already created.
+    # Acquire everything in this try-block so a mid-init failure still
+    # cleans up resources already created.
     cap = None
     try:
         cap = cv2.VideoCapture(camera_index)

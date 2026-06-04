@@ -38,12 +38,8 @@ except ModuleNotFoundError:
     from HandTrackingModule import HandTracker
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Gesture → keyboard binding (replaces the old comment block).
-# Each action can fire one OR MORE keys; all listed keys are
-# pressed/released together so a game can be played with either the
-# arrow keys (default) or the numpad.
-# ──────────────────────────────────────────────────────────────────────
+# An action can map to multiple keys that fire together, so the game
+# sees either arrow keys or the numpad, not just one.
 class KeyboardKey(Enum):
     """Windows virtual-key codes used by the gesture→keyboard mapper."""
 
@@ -61,8 +57,7 @@ class KeyboardKey(Enum):
     C = 0x43         # VK_C
     SHIFT = 0x10     # VK_SHIFT
 
-# Action → list of keys to press when the action becomes active.
-# The two-key per action matches the original comment table exactly.
+# Action → keys pressed/released when the action is active.
 ACTION_KEY_MAP: dict[str, tuple[KeyboardKey, ...]] = {
     ACTION_LEFT:       (KeyboardKey.LEFT,  KeyboardKey.NUMPAD4),
     ACTION_RIGHT:      (KeyboardKey.RIGHT, KeyboardKey.NUMPAD6),
@@ -74,10 +69,7 @@ ACTION_KEY_MAP: dict[str, tuple[KeyboardKey, ...]] = {
 }
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Win32 SendInput wrapper — no external dependency, talks to user32
-# directly to synthesize real OS key events.
-# ──────────────────────────────────────────────────────────────────────
+# Win32 SendInput wrapper — synthesizes real OS key events via user32.
 _INPUT_KEYBOARD = 1
 _KEYEVENTF_KEYUP = 0x0002
 
@@ -126,12 +118,10 @@ class _INPUT(ctypes.Structure):
     ]
 
 
-# Global hotkey constants (Win32 RegisterHotKey).
-# Only the modifiers actually used by the toggle hotkey are defined.
+# Win32 RegisterHotKey constants for the toggle hotkey.
 _MOD_ALT = 0x0001
 _MOD_CONTROL = 0x0002
 _MOD_NOREPEAT = 0x4000
-# Toggle hotkey: Ctrl+Alt+G  (G = "gestures")
 _TOGGLE_HOTKEY_ID = 1
 _TOGGLE_HOTKEY_MODS = _MOD_CONTROL | _MOD_ALT | _MOD_NOREPEAT
 _TOGGLE_VK = 0x47  # 'G'
@@ -140,15 +130,11 @@ _PM_REMOVE = 0x0001
 
 
 class Win32Keyboard:
-    """Send real keystrokes via the Win32 SendInput API.
+    """Send keystrokes via the Win32 SendInput API.
 
-    Holds a suspend flag (a `threading.Event`) so a global hotkey can halt
-    synthesis without destroying the object. All methods are no-ops on
-    non-Windows platforms so the module remains importable cross-platform.
-
-    A *Protocol*-style duck-typed test double only needs to implement
-    `press(key) -> bool` and `release(key) -> bool` (see
-    `GestureKeyboardDispatcher` for the consumer).
+    A `threading.Event` gates synthesis so the hotkey can halt it
+    without destroying the object. No-ops on non-Windows. Test doubles
+    only need `press(key) -> bool` and `release(key) -> bool`.
     """
 
     def __init__(self) -> None:
@@ -162,8 +148,7 @@ class Win32Keyboard:
                 self._user32 = None
                 self._kernel32 = None
 
-        # threading.Event is atomic and has well-defined memory ordering;
-        # is_set() = "synthesis is currently halted".
+        # is_set() means synthesis is halted.
         self._suspended = threading.Event()
         self._hotkey_thread: threading.Thread | None = None
         self._hotkey_stop = threading.Event()
@@ -172,7 +157,6 @@ class Win32Keyboard:
         if self._user32 is not None and sys.platform == "win32":
             self._start_hotkey_listener()
 
-    # ── suspension API ─────────────────────────────────────────────
     @property
     def suspended(self) -> bool:
         """True iff keyboard synthesis is currently halted."""
@@ -194,14 +178,9 @@ class Win32Keyboard:
         self._suspended.set()
         return True
 
-    # ── low-level send ─────────────────────────────────────────────
     def _send(self, vk: int, key_up: bool) -> bool:
-        """Send one synthetic key event. Returns True on success.
-
-        Returns False (without raising) if:
-          - the backend is not available (non-Windows)
-          - synthesis is currently suspended
-          - user32.SendInput reports 0 events delivered
+        """Send one synthetic key event. Returns False (no raise) if the
+        backend is missing, synthesis is suspended, or SendInput delivered 0.
         """
         if self._user32 is None or self._suspended.is_set():
             return False
@@ -229,18 +208,14 @@ class Win32Keyboard:
         """Simulate a key-up event. Returns True on success."""
         return self._send(int(key.value), key_up=True)
 
-    # ── global hotkey listener ─────────────────────────────────────
     def _start_hotkey_listener(self) -> None:
         """Spawn a daemon thread that registers + listens for the toggle hotkey.
 
-        IMPORTANT: Win32 hotkeys are thread-scoped — `RegisterHotKey(NULL, ...)`
-        posts `WM_HOTKEY` to the *calling* thread's message queue, and only
-        that thread can `UnregisterHotKey` it. Both calls therefore happen
-        inside the listener thread body, paired in a try/finally.
+        Hotkeys are thread-scoped: RegisterHotKey posts WM_HOTKEY to the
+        caller's queue, and only that thread can UnregisterHotKey. So
+        both calls live in the listener body, paired in try/finally.
         """
         def _pump() -> None:
-            # Register from THIS thread so the WM_HOTKEY lands in THIS
-            # thread's message queue.
             if not self._user32.RegisterHotKey(
                 None, _TOGGLE_HOTKEY_ID, _TOGGLE_HOTKEY_MODS, _TOGGLE_VK
             ):
@@ -277,10 +252,7 @@ class Win32Keyboard:
         self._hotkey_thread.start()
 
     def shutdown(self) -> None:
-        """Stop the hotkey listener and release the registered hotkey.
-
-        Idempotent: safe to call multiple times.
-        """
+        """Stop the hotkey listener and release the registered hotkey. Idempotent."""
         if self._shutdown_called:
             return
         self._shutdown_called = True
@@ -289,31 +261,18 @@ class Win32Keyboard:
             self._hotkey_thread.join(timeout=0.5)
 
     def __del__(self) -> None:
-        # Safety net for callers that forget shutdown() (e.g. short-lived
-        # test scripts). Best-effort: never raise during interpreter
-        # teardown.
+        # Safety net for callers that forget shutdown(); never raise.
         try:
             self.shutdown()
         except Exception:
             pass
 
 
-# ──────────────────────────────────────────────────────────────────────
-# GestureState → OS key events.
-# A key is pressed on a rising edge (action becomes True) and released
-# on a falling edge (action becomes False).  This way, holding a gesture
-# for many frames still results in exactly one keypress per gesture.
-# ──────────────────────────────────────────────────────────────────────
 class GestureKeyboardDispatcher:
-    """Bind a `GestureState` action dict to real keystrokes via a keyboard backend.
+    """Bind a `GestureState` action dict to real keystrokes.
 
-    The keyboard backend must expose `press(key) -> bool` and
-    `release(key) -> bool`; `Win32Keyboard` satisfies this, as does any
-    test double.
-
-    Only action names listed in `ALL_ACTIONS` are tracked. Unknown
-    action names in `state.actions` are silently ignored to keep
-    `_prev` bounded.
+    The keyboard backend needs `press(key) -> bool` and `release(key) -> bool`.
+    Unknown action names in `state.actions` are ignored.
     """
 
     def __init__(
@@ -333,40 +292,25 @@ class GestureKeyboardDispatcher:
     def dispatch(self, state: GestureState) -> None:
         """Update held keys to match the current action set.
 
-        Single pass over `self._known` (the canonical action set) that
-        handles rising edges and falling edges. Unknown keys present
-        in `state.actions` are silently dropped. `self._prev[name]`
-        is only updated when the OS operation succeeded, so a transient
-        `SendInput` failure causes a retry on the next frame instead
-        of diverging from the OS.
+        `_prev` is only updated when the OS call succeeded, so a
+        transient SendInput failure retries next frame instead of
+        diverging from the OS.
         """
         current = state.actions
 
-        # Only iterate over known action names so an unexpected key in
-        # `state.actions` cannot grow `_prev` without bound. Any held
-        # key for a now-unknown action is still released below.
+        # Only iterate known names so `state.actions` can't grow `_prev`.
         for action_name in self._known:
             was_active = self._prev.get(action_name, False)
             is_active = current.get(action_name, False)
             if is_active and not was_active:
                 if self._press_action(action_name):
                     self._prev[action_name] = True
-                # else: leave was_active=False; will retry next frame.
             elif was_active and not is_active:
                 if self._release_action(action_name):
                     self._prev[action_name] = False
-                # else: leave was_active=True; will retry next frame.
-            # else: steady state — `_prev` already equals the desired
-            # value, no work to do.
 
     def release_all(self) -> None:
-        """Best-effort release of every key currently held by the dispatcher.
-
-        Called from `main()`'s exit path. The return value of each
-        underlying release is intentionally discarded, and `_prev` is
-        unconditionally cleared, because the process is about to
-        terminate and there is no caller that could act on a failure.
-        """
+        """Best-effort release of every held key. Exit-path only."""
         for name in self._known:
             was_active = self._prev.get(name, False)
             if was_active and self._action_key_map.get(name, ()):
@@ -374,12 +318,7 @@ class GestureKeyboardDispatcher:
             self._prev[name] = False
 
     def pressed_actions(self) -> list[str]:
-        """Return the action names currently considered 'pressed'.
-
-        The list reflects the dispatcher's `_prev` state, which is only
-        set to `True` after a successful `press` and only cleared after
-        a successful `release`. Order matches `ALL_ACTIONS`.
-        """
+        """Action names currently considered 'pressed' (in ALL_ACTIONS order)."""
         return [name for name in ALL_ACTIONS if self._prev.get(name, False)]
 
     def pressed_keys_for(self, action_name: str) -> tuple[KeyboardKey, ...]:
@@ -387,13 +326,7 @@ class GestureKeyboardDispatcher:
         return self._action_key_map.get(action_name, ())
 
     def _press_action(self, action_name: str) -> bool:
-        """Press all keys for `action_name`. True iff every key was sent.
-
-        On partial failure (one key's `press` succeeded, a later key's
-        failed) the keys that *did* succeed are released before
-        returning, so the OS state matches the dispatcher's belief and
-        a self-heal on the next frame starts from a clean slate.
-        """
+        """Press all keys for `action_name`. Rolls back partial successes."""
         keys = self._action_key_map.get(action_name, ())
         if not keys:
             return True
@@ -410,12 +343,7 @@ class GestureKeyboardDispatcher:
         return all_ok
 
     def _release_action(self, action_name: str) -> bool:
-        """Release all keys for `action_name`. True iff every key was sent.
-
-        No useful rollback exists for a partial release failure — a
-        physical key cannot be "un-released" — so the call simply
-        attempts all keys and reports the AND.
-        """
+        """Release all keys for `action_name`. No useful rollback for partial failure."""
         keys = self._action_key_map.get(action_name, ())
         if not keys:
             return True
@@ -426,9 +354,6 @@ class GestureKeyboardDispatcher:
         draw_pressed_keys_overlay(img, dispatcher, keyboard)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Camera loop
-# ──────────────────────────────────────────────────────────────────────
 _PRETTY_KEY_NAMES: dict[KeyboardKey, str] = {
     KeyboardKey.LEFT: "Left",
     KeyboardKey.UP: "Up",
@@ -449,15 +374,7 @@ def draw_pressed_keys_overlay(
     dispatcher: "GestureKeyboardDispatcher",
     keyboard: "Win32Keyboard",
 ) -> None:
-    """Render a top-left text overlay showing the currently pressed keys.
-
-    Layout:
-      Line 1: status — "SUSPENDED (Ctrl+Alt+G to resume)" in red, or
-              "ACTIVE" in green.
-      Line 2+: one line per pressed action, formatted as
-               "  <action>: <Key1>, <Key2>".
-    If no actions are pressed (and not suspended), shows "Held: (none)".
-    """
+    """Top-left overlay: status line, then one line per pressed action."""
     pad_x = 12
     line1_y = 80
     line_step = 24
@@ -516,9 +433,8 @@ def draw_pressed_keys_overlay(
 
 
 def main(camera_index: int = 0) -> None:
-    # All resources (camera, keyboard, dispatcher) are acquired inside
-    # this try-block so a failure to construct any of them still cleans
-    # up the ones already created.
+    # Acquire everything in this try-block so a mid-init failure still
+    # cleans up resources already created.
     cap = None
     try:
         cap = cv2.VideoCapture(camera_index)

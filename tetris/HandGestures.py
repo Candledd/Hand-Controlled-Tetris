@@ -29,6 +29,9 @@ _FIST_TIP_MCP_PAIRS = (
     (20, 17), # pinky
 )
 
+# Peace sign: thumb, ring, and pinky tips must be clustered together.
+_PEACE_TIP_INDICES = (4, 16, 20)
+
 ACTION_LEFT = "left"
 ACTION_RIGHT = "right"
 ACTION_ROTATE = "rotate"
@@ -70,7 +73,6 @@ GESTURE_ACTIONS: dict[Gesture, str] = {
 }
 
 
-# Init
 @dataclass
 class GestureState:
     gesture: Gesture = Gesture.NONE
@@ -84,7 +86,7 @@ class GestureState:
 
 
 def actions_for_gesture(gesture: Gesture) -> dict[str, bool]:
-    """Ensure only one gesture is true, turns everything else false."""
+    """Action dict for a single gesture with all others off."""
     actions = {name: False for name in ALL_ACTIONS}
     action = GESTURE_ACTIONS.get(gesture)
     if action:
@@ -117,7 +119,7 @@ def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
 
 
 class GestureDetector:
-    """Converts `HandData` lists into `GestureState` for frame."""
+    """Turns a list of `HandData` into a per-frame `GestureState`."""
 
     def __init__(
         self,
@@ -132,6 +134,7 @@ class GestureDetector:
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
         ema_alpha: float = 0.5,
+        peace_tip_proximity: float = 0.1,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -144,6 +147,7 @@ class GestureDetector:
 
         # alpha=1.0 means no smoothing (raw), alpha=0.0 means fully lagged.
         self._ema_alpha = ema_alpha
+        self._peace_tip_proximity_sq = peace_tip_proximity ** 2
         self._smoothed_wrist: dict[HandKey, tuple[float, float]] = {}
 
         self._y_history: dict[HandKey, deque[float]] = {}
@@ -169,19 +173,16 @@ class GestureDetector:
         self._rock_confirm_count: dict[HandKey, int] = {}
         self._rock_confirm_needed: int = 5
 
-        # Adaptive deadzone: scales the opposite-axis threshold down
-        # based on how many consecutive frames the current action is sustained.
+        # Adaptive deadzone: opposite-axis gate tightens the longer an action is held.
         self._active_gesture_frames: dict[HandKey, int] = {}
-        self._deadzone_max_frames: int = 20       # frames to reach maximum deadzone
-        self._deadzone_max_scale: float = 3.0     # at max, gate is 3x more restrictive
+        self._deadzone_max_frames: int = 20
+        self._deadzone_max_scale: float = 3.0
 
-        # Axis-dominance gates: if the opposite axis exceeds this per-frame
-        # velocity, the detector suppresses itself.  Prevents wrist-extension
-        # during swipes from triggering drops, and vice versa.
+        # Opposite-axis gates: strong motion on the wrong axis suppresses
+        # the current detector (e.g. a wrist dip mid-swipe shouldn't drop).
         self._horizontal_gate = swipe_threshold / swipe_velocity_divisor * 1.5
         self._vertical_gate = soft_drop_threshold / drop_velocity_divisor * 2.0
 
-        # Per-frame velocity thresholds for continuous motion
         self._swipe_velocity_threshold = swipe_threshold / swipe_velocity_divisor * 0.39
         self._soft_drop_velocity_threshold = soft_drop_threshold / drop_velocity_divisor * 0.5
 
@@ -196,7 +197,7 @@ class GestureDetector:
         draw_gesture_overlay(img, state)
 
     def update(self, hands: list[HandData]) -> GestureState:
-        """Looks for detection based on current frame."""
+        """Run per-frame detection and return the resulting state."""
         present = self._present_hand_keys(hands)
         self._cleanup_missing_hands(present)
 
@@ -213,9 +214,8 @@ class GestureDetector:
             raw_x = hand.landmarks_norm[WRIST][0]
             raw_y = hand.landmarks_norm[WRIST][1]
 
-            # Apply EMA smoothing to wrist position.  The key is based on
-            # handedness instead of MediaPipe's list index so the motion history
-            # stays attached to the same physical hand when detection order flips.
+            # EMA-smooth the wrist. Keyed by handedness (not list index)
+            # so history follows the hand when detection order flips.
             if hand_key in self._smoothed_wrist:
                 prev_sx, prev_sy = self._smoothed_wrist[hand_key]
                 a = self._ema_alpha
@@ -233,7 +233,7 @@ class GestureDetector:
             if gesture is Gesture.NONE:
                 gesture = self._detect_fist(hand, hand_key)
             if gesture is Gesture.NONE:
-                gesture = self._detect_peace(hand_key)
+                gesture = self._detect_peace(hand, hand_key)
             if gesture is Gesture.NONE:
                 gesture = self._detect_rock(hand_key)
             if gesture is Gesture.NONE:
@@ -271,7 +271,6 @@ class GestureDetector:
         return f"{label}:{seen_hands[label]}"
 
     def _cleanup_missing_hands(self, present: set[HandKey]) -> None:
-        # Clean up state for hands no longer present.
         for hand_key in list(self._y_history.keys()):
             if hand_key in present:
                 continue
@@ -353,30 +352,21 @@ class GestureDetector:
 
     @staticmethod
     def _compute_palm_normal_z(hand: HandData) -> float:
-        """Compute the z-component of the palm plane normal vector.
-
-        Uses the cross product of (WRIST → INDEX_MCP) × (WRIST → PINKY_MCP).
-        Returns a value between -1.0 and 1.0:
-          - |z| close to 1.0: palm faces the camera (hand is upright/vertical)
-          - |z| close to 0.0: palm is edge-on (hand is tilted horizontally)
-        """
+        """z-component of the palm-plane normal (|result| near 1 = palm faces camera)."""
         w = hand.landmarks_norm[WRIST]
         idx = hand.landmarks_norm[INDEX_MCP]
         pnk = hand.landmarks_norm[PINKY_MCP]
 
-        # Vectors from wrist to index MCP and pinky MCP
         ax, ay, az = idx[0] - w[0], idx[1] - w[1], idx[2] - w[2]
         bx, by, bz = pnk[0] - w[0], pnk[1] - w[1], pnk[2] - w[2]
 
-        # Cross product
         nx = ay * bz - az * by
         ny = az * bx - ax * bz
         nz = ax * by - ay * bx
 
-        # Magnitude
         mag = (nx * nx + ny * ny + nz * nz) ** 0.5
         if mag < 1e-9:
-            return 1.0  # Degenerate case — assume facing camera
+            return 1.0  # degenerate: assume facing camera
 
         return nz / mag
 
@@ -384,32 +374,23 @@ class GestureDetector:
         wrist = hand.landmarks_norm[WRIST]
         wrist_x, wrist_y = wrist[0], wrist[1]
 
-        # ── In-plane rotation gate ──
-        # Prevent false fists when the hand is rotated horizontally.
-        # Calculate vector from wrist to base of middle finger.
+        # Upright cone gate (±45°). Suppress if the hand is horizontal
+        # or pointing down (rotation otherwise reads as a fist).
         mid_mcp = hand.landmarks_norm[MIDDLE_MCP]
-        up_dy = wrist_y - mid_mcp[1]  # positive when pointing UP
+        up_dy = wrist_y - mid_mcp[1]
         up_dx = mid_mcp[0] - wrist_x
-
-        # Enforce a 90-degree upright cone (45 deg left/right).
-        # If horizontal or pointing down, suppress fist.
         if up_dy < abs(up_dx):
             self._fist_confirm_count[hand_key] = 0
             return Gesture.NONE
 
         min_needed = self.min_curled_fingers
 
-        # ── Palm orientation gate ──
-        # When the palm is significantly tilted (edge-on to the camera),
-        # 2D foreshortening makes extended fingers look curled.
-        # Require ALL 5 fingers to be curled when the palm is tilted.
+        # Edge-on palm: 2D foreshortening curls extended fingers,
+        # so demand all 5 curled before counting it.
         palm_nz = abs(self._compute_palm_normal_z(hand))
         if palm_nz < self._palm_tilt_threshold:
-            min_needed = 5  # Must have every finger curled to count as fist
+            min_needed = 5
 
-        # ── Smoothed motion gate ──
-        # If the wrist is moving fast, raise the bar to avoid
-        # transient curls during swipes.
         if hand_key not in self._wrist_velocities:
             self._wrist_velocities[hand_key] = deque(maxlen=2)
 
@@ -425,9 +406,6 @@ class GestureDetector:
 
         self._prev_wrist[hand_key] = (wrist_x, wrist_y)
 
-        # ── Multi-frame confirmation ──
-        # Require the fist to be sustained for N consecutive frames
-        # before firing.  Filters transient curls from natural movement.
         if self._curled_count.get(hand_key, 0) >= min_needed:
             count = self._fist_confirm_count.get(hand_key, 0) + 1
             self._fist_confirm_count[hand_key] = count
@@ -435,34 +413,43 @@ class GestureDetector:
                 return Gesture.FIST
             return Gesture.NONE
 
-        # Curl count dropped below threshold — reset confirmation
         self._fist_confirm_count[hand_key] = 0
         return Gesture.NONE
 
-    def _detect_peace(self, hand_key: HandKey) -> Gesture:
+    def _detect_peace(self, hand: HandData, hand_key: HandKey) -> Gesture:
         states = self._finger_curled.get(hand_key)
         if not states or len(states) != 5:
             return Gesture.NONE
-            
-        # Peace sign: Index(1) and Middle(2) UP (not curled). Thumb(0), Ring(3), Pinky(4) DOWN (curled).
-        if states[0] and not states[1] and not states[2] and states[3] and states[4]:
-            return Gesture.PEACE
-        return Gesture.NONE
+
+        # Index + middle up, thumb/ring/pinky curled.
+        if not (states[0] and not states[1] and not states[2] and states[3] and states[4]):
+            return Gesture.NONE
+
+        # The three curled tips must be clustered together (peace: thumb tucked over the ring/pinky).
+        tips = [hand.landmarks_norm[i] for i in _PEACE_TIP_INDICES]
+        zw = self._z_weight
+        thresh = self._peace_tip_proximity_sq
+        for a, b in ((0, 1), (0, 2), (1, 2)):
+            dx = tips[a][0] - tips[b][0]
+            dy = tips[a][1] - tips[b][1]
+            dz = (tips[a][2] - tips[b][2]) * zw
+            if dx * dx + dy * dy + dz * dz >= thresh:
+                return Gesture.NONE
+        return Gesture.PEACE
 
     def _detect_rock(self, hand_key: HandKey) -> Gesture:
         states = self._finger_curled.get(hand_key)
         if not states or len(states) != 5:
             return Gesture.NONE
-            
-        # Rock sign: Index(1) and Pinky(4) UP (not curled). Thumb(0), Middle(2), Ring(3) DOWN (curled).
+
+        # Rock: index + pinky up, others curled.
         if states[0] and not states[1] and states[2] and states[3] and not states[4]:
             return Gesture.ROCK
         return Gesture.NONE
 
     def _detect_swipe(self, hand: HandData, hand_key: HandKey,
                       hand_wrist_x: float, prev_wrist_x: float | None) -> Gesture:
-        # Gate: if the hand is moving downward significantly (dropping),
-        # suppress swipe detection (uses y-history from _detect_drop)
+        # Suppress if the hand is dropping — y-history comes from _detect_drop.
         y_history = self._y_history.get(hand_key)
         if y_history is not None and len(y_history) >= 2:
             y_velocity = abs(y_history[-1] - y_history[-2])
@@ -470,14 +457,10 @@ class GestureDetector:
                 self._swipe_confirm_count[hand_key] = 0
                 return Gesture.NONE
 
-        # Gate: if 2+ fingers are curled, hand is forming a fist — suppress swipe
         if self._curled_count.get(hand_key, 0) >= 2:
             self._swipe_confirm_count[hand_key] = 0
             return Gesture.NONE
 
-        # Continuous per-frame velocity with 2-frame confirmation:
-        # A swipe only fires after the threshold is exceeded for
-        # _swipe_confirm_needed consecutive frames, filtering jitter.
         if prev_wrist_x is not None:
             velocity = hand_wrist_x - prev_wrist_x
             is_right = hand.handedness == "Right"
@@ -498,10 +481,8 @@ class GestureDetector:
                     self._swipe_drop_cooldown[hand_key] = self._swipe_drop_cooldown_frames
                     return candidate
                 return Gesture.NONE
-            else:
-                # Reset confirmation counter when velocity drops below threshold
-                self._swipe_confirm_count[hand_key] = 0
 
+            self._swipe_confirm_count[hand_key] = 0
             return Gesture.NONE
 
         return Gesture.NONE
@@ -509,7 +490,6 @@ class GestureDetector:
     def _detect_drop(self, hand: HandData, hand_key: HandKey,
                      hand_wrist_x: float, hand_wrist_y: float,
                      prev_wrist_x: float | None) -> Gesture:
-        # Initialize per-hand state on first sighting
         if hand_key not in self._y_history:
             self._y_history[hand_key] = deque(maxlen=2)
             self._prev_y[hand_key] = None
@@ -520,15 +500,14 @@ class GestureDetector:
         average_x = hand_wrist_x
         history = self._y_history[hand_key]
 
-        # Hard drop cooldown — completely blocks all drop detection
         if self._hard_drop_cooldown[hand_key] > 0:
             self._hard_drop_cooldown[hand_key] -= 1
             history.append(average_y)
             self._prev_y[hand_key] = average_y
             return Gesture.NONE
 
-        # Hard drop check — BEFORE the horizontal gate so fast deliberate
-        # downward flicks are never suppressed by mild sideways wrist drift
+        # Hard drop is checked before the horizontal gate so a deliberate
+        # downward flick isn't suppressed by mild sideways drift.
         if self._prev_y[hand_key] is not None:
             velocity = average_y - self._prev_y[hand_key]
 
@@ -539,8 +518,6 @@ class GestureDetector:
                 self._swipe_drop_cooldown[hand_key] = 0
                 return Gesture.SWIPE_DOWN_FAST
 
-        # Gate: if hand is moving sideways with significant speed (swiping),
-        # suppress soft drops to avoid accidental wrist-extension drops
         if prev_wrist_x is not None:
             x_velocity = abs(average_x - prev_wrist_x)
             if x_velocity >= self._horizontal_gate / self._deadzone_scale(hand_key):
@@ -549,20 +526,17 @@ class GestureDetector:
                 return Gesture.NONE
 
         if self._prev_y[hand_key] is not None:
-            # Swipe-drop cooldown — suppress soft drops briefly after a swipe
             if self._swipe_drop_cooldown[hand_key] > 0:
                 self._swipe_drop_cooldown[hand_key] -= 1
                 self._prev_y[hand_key] = average_y
                 history.append(average_y)
                 return Gesture.NONE
 
-            # Gate: if 2+ fingers are curled, hand is forming a fist — suppress soft drop
             if self._curled_count.get(hand_key, 0) >= 2:
                 self._prev_y[hand_key] = average_y
                 history.append(average_y)
                 return Gesture.NONE
 
-            # Soft drop — continuous per-frame velocity
             velocity = average_y - self._prev_y[hand_key]
             scaled_drop_threshold = self._soft_drop_velocity_threshold * self._deadzone_scale(hand_key)
             if velocity >= scaled_drop_threshold:
