@@ -137,7 +137,8 @@ class GestureDetector:
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
         ema_alpha: float = 0.5,
-        curled_tip_proximity: float = 0.2,
+        curled_tip_proximity: float = 0.15,
+        gesture_motion_gate: float = 0.012,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -151,6 +152,7 @@ class GestureDetector:
         # alpha=1.0 means no smoothing (raw), alpha=0.0 means fully lagged.
         self._ema_alpha = ema_alpha
         self._curled_tip_proximity_sq = curled_tip_proximity ** 2
+        self._gesture_motion_gate = gesture_motion_gate
         self._smoothed_wrist: dict[HandKey, tuple[float, float]] = {}
 
         self._y_history: dict[HandKey, deque[float]] = {}
@@ -170,11 +172,11 @@ class GestureDetector:
         self._swipe_confirm_count: dict[HandKey, int] = {}
         self._swipe_confirm_needed: int = 1
         self._fist_confirm_count: dict[HandKey, int] = {}
-        self._fist_confirm_needed: int = 3
+        self._fist_confirm_needed: int = 4
         self._peace_confirm_count: dict[HandKey, int] = {}
-        self._peace_confirm_needed: int = 3
+        self._peace_confirm_needed: int = 5
         self._rock_confirm_count: dict[HandKey, int] = {}
-        self._rock_confirm_needed: int = 3
+        self._rock_confirm_needed: int = 5
 
         # Adaptive deadzone: opposite-axis gate tightens the longer an action is held.
         self._active_gesture_frames: dict[HandKey, int] = {}
@@ -187,7 +189,7 @@ class GestureDetector:
         self._vertical_gate = soft_drop_threshold / drop_velocity_divisor * 2.0
 
         self._swipe_velocity_threshold = swipe_threshold / swipe_velocity_divisor * 0.39
-        self._soft_drop_velocity_threshold = soft_drop_threshold / drop_velocity_divisor * 0.5
+        self._soft_drop_velocity_threshold = soft_drop_threshold / drop_velocity_divisor * 0.7
 
     def __enter__(self) -> "GestureDetector":
         return self
@@ -386,6 +388,15 @@ class GestureDetector:
             self._fist_confirm_count[hand_key] = 0
             return Gesture.NONE
 
+        # Motion gate: suppress fist when the hand is actively swiping.
+        prev = self._smoothed_wrist.get(hand_key)
+        curr = (wrist_x, wrist_y)
+        if prev is not None:
+            motion = abs(curr[0] - prev[0]) + abs(curr[1] - prev[1])
+            if motion > self._gesture_motion_gate:
+                self._fist_confirm_count[hand_key] = 0
+                return Gesture.NONE
+
         min_needed = self.min_curled_fingers
 
         # Edge-on palm: 2D foreshortening curls extended fingers,
@@ -430,6 +441,16 @@ class GestureDetector:
             self._peace_confirm_count[hand_key] = 0
             return Gesture.NONE
 
+        # Motion gate: suppress when the hand is actively moving.
+        prev = self._smoothed_wrist.get(hand_key)
+        wrist = hand.landmarks_norm[WRIST]
+        curr = (wrist[0], wrist[1])
+        if prev is not None:
+            motion = abs(curr[0] - prev[0]) + abs(curr[1] - prev[1])
+            if motion > self._gesture_motion_gate:
+                self._peace_confirm_count[hand_key] = 0
+                return Gesture.NONE
+
         # The three curled tips must be clustered together (peace: thumb tucked over the ring/pinky).
         tips = [hand.landmarks_norm[i] for i in _PEACE_TIP_INDICES]
         zw = self._z_weight
@@ -458,6 +479,16 @@ class GestureDetector:
         if not (states[0] and states[2] and states[3]):
             self._rock_confirm_count[hand_key] = 0
             return Gesture.NONE
+
+        # Motion gate: suppress when the hand is actively moving.
+        prev = self._smoothed_wrist.get(hand_key)
+        wrist = hand.landmarks_norm[WRIST]
+        curr = (wrist[0], wrist[1])
+        if prev is not None:
+            motion = abs(curr[0] - prev[0]) + abs(curr[1] - prev[1])
+            if motion > self._gesture_motion_gate:
+                self._rock_confirm_count[hand_key] = 0
+                return Gesture.NONE
 
         # Index and pinky are the "rock" fingers. Don't reuse the strict fist
         # curl threshold for them: a slightly curled pinky (tip-MCP d² just
