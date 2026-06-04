@@ -137,7 +137,7 @@ class GestureDetector:
         z_weight: float = 2.0,
         palm_tilt_threshold: float = 0.35,
         ema_alpha: float = 0.5,
-        curled_tip_proximity: float = 0.15,
+        curled_tip_proximity: float = 0.2,
     ) -> None:
         self.fist_curled_threshold = fist_curled_threshold
         self._fist_curled_threshold_sq = fist_curled_threshold ** 2
@@ -174,7 +174,7 @@ class GestureDetector:
         self._peace_confirm_count: dict[HandKey, int] = {}
         self._peace_confirm_needed: int = 3
         self._rock_confirm_count: dict[HandKey, int] = {}
-        self._rock_confirm_needed: int = 5
+        self._rock_confirm_needed: int = 3
 
         # Adaptive deadzone: opposite-axis gate tightens the longer an action is held.
         self._active_gesture_frames: dict[HandKey, int] = {}
@@ -422,10 +422,12 @@ class GestureDetector:
     def _detect_peace(self, hand: HandData, hand_key: HandKey) -> Gesture:
         states = self._finger_curled.get(hand_key)
         if not states or len(states) != 5:
+            self._peace_confirm_count[hand_key] = 0
             return Gesture.NONE
 
         # Index + middle up, thumb/ring/pinky curled.
         if not (states[0] and not states[1] and not states[2] and states[3] and states[4]):
+            self._peace_confirm_count[hand_key] = 0
             return Gesture.NONE
 
         # The three curled tips must be clustered together (peace: thumb tucked over the ring/pinky).
@@ -437,29 +439,59 @@ class GestureDetector:
             dy = tips[a][1] - tips[b][1]
             dz = (tips[a][2] - tips[b][2]) * zw
             if dx * dx + dy * dy + dz * dz >= thresh:
+                self._peace_confirm_count[hand_key] = 0
                 return Gesture.NONE
-        return Gesture.PEACE
+
+        count = self._peace_confirm_count.get(hand_key, 0) + 1
+        self._peace_confirm_count[hand_key] = count
+        if count >= self._peace_confirm_needed:
+            return Gesture.PEACE
+        return Gesture.NONE
 
     def _detect_rock(self, hand: HandData, hand_key: HandKey) -> Gesture:
+        # Thumb/middle/ring must register as curled under the global fist
+        # threshold — those are the fingers that tuck over the palm.
         states = self._finger_curled.get(hand_key)
         if not states or len(states) != 5:
+            self._rock_confirm_count[hand_key] = 0
+            return Gesture.NONE
+        if not (states[0] and states[2] and states[3]):
+            self._rock_confirm_count[hand_key] = 0
             return Gesture.NONE
 
-        # Index + pinky up, thumb/middle/ring curled.
-        if not (states[0] and not states[1] and states[2] and states[3] and not states[4]):
-            return Gesture.NONE
+        # Index and pinky are the "rock" fingers. Don't reuse the strict fist
+        # curl threshold for them: a slightly curled pinky (tip-MCP d² just
+        # under the curl cutoff) still reads as a rock sign. Use a dedicated,
+        # looser extension threshold — well below the curl cutoff, so a
+        # genuinely curled finger still fails here.
+        extension_thresh_sq = self._fist_curled_threshold_sq * 0.6
+        zw = self._z_weight
+        for tip_idx, mcp_idx in ((8, 5), (20, 17)):
+            tip = hand.landmarks_norm[tip_idx]
+            mcp = hand.landmarks_norm[mcp_idx]
+            dx = tip[0] - mcp[0]
+            dy = tip[1] - mcp[1]
+            dz = (tip[2] - mcp[2]) * zw
+            if dx * dx + dy * dy + dz * dz < extension_thresh_sq:
+                self._rock_confirm_count[hand_key] = 0
+                return Gesture.NONE
 
         # The three curled tips must be clustered together. (thumb tucked over middle/ring)
         tips = [hand.landmarks_norm[i] for i in _ROCK_TIP_INDICES]
-        zw = self._z_weight
         thresh = self._curled_tip_proximity_sq
         for a, b in ((0, 1), (0, 2), (1, 2)):
             dx = tips[a][0] - tips[b][0]
             dy = tips[a][1] - tips[b][1]
             dz = (tips[a][2] - tips[b][2]) * zw
             if dx * dx + dy * dy + dz * dz >= thresh:
+                self._rock_confirm_count[hand_key] = 0
                 return Gesture.NONE
-        return Gesture.ROCK
+
+        count = self._rock_confirm_count.get(hand_key, 0) + 1
+        self._rock_confirm_count[hand_key] = count
+        if count >= self._rock_confirm_needed:
+            return Gesture.ROCK
+        return Gesture.NONE
 
     def _detect_swipe(self, hand: HandData, hand_key: HandKey,
                       hand_wrist_x: float, prev_wrist_x: float | None) -> Gesture:
@@ -569,7 +601,6 @@ def main(camera_index: int = 0) -> None:
         print(f"Error: Could not open camera {camera_index}")
         return
 
-    prev_time = 0.0
     detector = GestureDetector()
 
     try:
@@ -582,22 +613,11 @@ def main(camera_index: int = 0) -> None:
                 img, hands = tracker.find_hands(img)
                 img = tracker.label_hands(img)
                 state = detector.update(hands)
+
+                if cv2.waitKey(1) & 0xFF == ord("t"):
+                    tracker.print_telemetry_snapshot(hands)
+
                 draw_gesture_overlay(img, state)
-
-                curr_time = time.time()
-                dt = curr_time - prev_time
-                fps = int(1 / dt) if dt > 1e-6 else 0
-                prev_time = curr_time
-                cv2.putText(
-                    img,
-                    str(fps),
-                    (10, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 255, 255),
-                    1,
-                )
-
                 cv2.imshow("Hand Gestures", img)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break

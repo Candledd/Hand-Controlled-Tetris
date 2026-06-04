@@ -18,6 +18,34 @@ mp_drawing_styles = mp.tasks.vision.drawing_styles
 WRIST = 0
 HAND_LABEL_COLOR = (88, 205, 54)
 
+TELEMETRY_KEY = ord("t")
+
+_LANDMARK_LABELS: tuple[str, ...] = (
+    "WRIST",
+    "THUMB_CMC",
+    "THUMB_MCP",
+    "THUMB_IP",
+    "THUMB_TIP",
+    "INDEX_MCP",
+    "INDEX_PIP",
+    "INDEX_DIP",
+    "INDEX_TIP",
+    "MIDDLE_MCP",
+    "MIDDLE_PIP",
+    "MIDDLE_DIP",
+    "MIDDLE_TIP",
+    "RING_MCP",
+    "RING_PIP",
+    "RING_DIP",
+    "RING_TIP",
+    "PINKY_MCP",
+    "PINKY_PIP",
+    "PINKY_DIP",
+    "PINKY_TIP",
+)
+
+_TIP_SET: frozenset[int] = frozenset(FINGER_TIPS)
+
 
 @dataclass
 class HandData:
@@ -133,6 +161,35 @@ class HandTracker:
                 cv2.circle(img, (x, y), 5, (255, 0, 255), cv2.FILLED)
         return positions
 
+    @staticmethod
+    def print_telemetry_snapshot(hands: list[HandData]) -> None:
+        bar = "=" * 92
+        print(f"\n{bar}")
+        print("FINGER POSITION TELEMETRY SNAPSHOT")
+        print(bar)
+        if not hands:
+            print("(no hands detected)")
+            print(bar)
+            return
+        for h_idx, hand in enumerate(hands):
+            print(f"\nHand {h_idx} ({hand.handedness})")
+            print("-" * 92)
+            print(
+                f"{'ID':>2}  {'NAME':<11}  {'PX_X':>5}  {'PX_Y':>5}  "
+                f"{'NORM_X':>7}  {'NORM_Y':>7}  {'NORM_Z':>7}"
+            )
+            for i, (px, norm) in enumerate(
+                zip(hand.landmarks_px, hand.landmarks_norm)
+            ):
+                label = _LANDMARK_LABELS[i]
+                nx, ny, nz = norm
+                x, y = px
+                print(
+                    f"{i:>2}  {label:<11}  {x:>5}  {y:>5}  "
+                    f"{nx:>+7.3f}  {ny:>+7.3f}  {nz:>+7.3f}"
+                )
+        print(bar + "\n", flush=True)
+
     def label_hands(
         self, img: np.ndarray, hands: list[HandData] | None = None
     ) -> np.ndarray:
@@ -176,3 +233,4 @@ class HandTracker:
                 )
             )
         return hands
+    

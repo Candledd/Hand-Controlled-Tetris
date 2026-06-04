@@ -31,9 +31,6 @@ def main() -> None:
 
             img, hands = tracker.find_hands(img)
 
-            if hands:
-                index_tip = tracker.find_position(hand_no=0, landmark_id=8)
-
             cv2.imshow("Image", img)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
