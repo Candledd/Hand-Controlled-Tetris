@@ -16,6 +16,7 @@ try:
         ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
+        ACTION_ROTATE_CCW,
         ACTION_SOFT_DROP,
         ALL_ACTIONS,
         GestureDetector,
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
         ACTION_RETRY,
         ACTION_RIGHT,
         ACTION_ROTATE,
+        ACTION_ROTATE_CCW,
         ACTION_SOFT_DROP,
         ALL_ACTIONS,
         GestureDetector,
@@ -56,12 +58,15 @@ class KeyboardKey(Enum):
     R = 0x52         # VK_R  (used for ACTION_RETRY)
     C = 0x43         # VK_C
     SHIFT = 0x10     # VK_SHIFT
+    CONTROL = 0x11   # VK_CONTROL
+    Z = 0x5A         # VK_Z
 
 # Action → keys pressed/released when the action is active.
 ACTION_KEY_MAP: dict[str, tuple[KeyboardKey, ...]] = {
     ACTION_LEFT:       (KeyboardKey.LEFT,  KeyboardKey.NUMPAD4),
     ACTION_RIGHT:      (KeyboardKey.RIGHT, KeyboardKey.NUMPAD6),
     ACTION_ROTATE:     (KeyboardKey.UP,    KeyboardKey.NUMPAD9),
+    ACTION_ROTATE_CCW: (KeyboardKey.CONTROL, KeyboardKey.Z),
     ACTION_HARD_DROP:  (KeyboardKey.SPACE, KeyboardKey.NUMPAD8),
     ACTION_SOFT_DROP:  (KeyboardKey.DOWN,  KeyboardKey.NUMPAD2),
     ACTION_RETRY:      (KeyboardKey.R,),
@@ -366,6 +371,8 @@ _PRETTY_KEY_NAMES: dict[KeyboardKey, str] = {
     KeyboardKey.NUMPAD6: "Numpad 6",
     KeyboardKey.NUMPAD8: "Numpad 8",
     KeyboardKey.NUMPAD9: "Numpad 9",
+    KeyboardKey.CONTROL: "Control",
+    KeyboardKey.Z: "Z",
 }
 
 

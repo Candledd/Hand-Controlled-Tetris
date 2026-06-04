@@ -38,6 +38,7 @@ _ROCK_TIP_INDICES = (4, 12, 16)
 ACTION_LEFT = "left"
 ACTION_RIGHT = "right"
 ACTION_ROTATE = "rotate"
+ACTION_ROTATE_CCW = "rotate_ccw"
 ACTION_HARD_DROP = "hard_drop"
 ACTION_SOFT_DROP = "soft_drop"
 ACTION_RETRY = "retry"
@@ -47,6 +48,7 @@ ALL_ACTIONS: tuple[str, ...] = (
     ACTION_LEFT,
     ACTION_RIGHT,
     ACTION_ROTATE,
+    ACTION_ROTATE_CCW,
     ACTION_HARD_DROP,
     ACTION_SOFT_DROP,
     ACTION_RETRY,
@@ -58,7 +60,8 @@ class Gesture(Enum):
     NONE = "none"
     SWIPE_LEFT = "swipe_left"
     SWIPE_RIGHT = "swipe_right"
-    FIST = "fist"
+    FIST_CW = "fist_cw"
+    FIST_CCW = "fist_ccw"
     SWIPE_DOWN_FAST = "swipe_down_fast"
     SWIPE_DOWN_SLOW = "swipe_down_slow"
     PEACE = "peace"
@@ -68,7 +71,8 @@ class Gesture(Enum):
 GESTURE_ACTIONS: dict[Gesture, str] = {
     Gesture.SWIPE_LEFT: ACTION_LEFT,
     Gesture.SWIPE_RIGHT: ACTION_RIGHT,
-    Gesture.FIST: ACTION_ROTATE,
+    Gesture.FIST_CW: ACTION_ROTATE,
+    Gesture.FIST_CCW: ACTION_ROTATE_CCW,
     Gesture.SWIPE_DOWN_FAST: ACTION_HARD_DROP,
     Gesture.SWIPE_DOWN_SLOW: ACTION_SOFT_DROP,
     Gesture.PEACE: ACTION_HOLD,
@@ -424,7 +428,10 @@ class GestureDetector:
             count = self._fist_confirm_count.get(hand_key, 0) + 1
             self._fist_confirm_count[hand_key] = count
             if count >= self._fist_confirm_needed:
-                return Gesture.FIST
+                if hand.handedness == "Left":
+                    return Gesture.FIST_CCW
+                else:
+                    return Gesture.FIST_CW
             return Gesture.NONE
 
         self._fist_confirm_count[hand_key] = 0
