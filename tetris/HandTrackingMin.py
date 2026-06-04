@@ -1,7 +1,10 @@
 import cv2
 import time
 
-from HandTrackingModule import HandTracker
+try:
+    from tetris.HandTrackingModule import HandTracker
+except ModuleNotFoundError:
+    from HandTrackingModule import HandTracker
 
 
 def draw_fps(img, fps: float) -> None:

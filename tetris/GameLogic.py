@@ -1,23 +1,44 @@
 from __future__ import annotations
 
 from enum import Enum
+import cv2
 
-from GestureConversions import (
-    ACTION_KEY_MAP,
-    GestureKeyboardDispatcher,
-    KeyboardKey,
-    Win32Keyboard,
-)
-from HandGestures import (
-    ACTION_HARD_DROP,
-    ACTION_LEFT,
-    ACTION_PAUSE,
-    ACTION_RIGHT,
-    ACTION_ROTATE,
-    ACTION_SOFT_DROP,
-    GestureState,
-)
-
+try:
+    from tetris.GestureConversions import (
+        ACTION_KEY_MAP,
+        GestureKeyboardDispatcher,
+        KeyboardKey,
+        Win32Keyboard,
+    )
+    from tetris.HandGestures import (
+        ACTION_HARD_DROP,
+        ACTION_LEFT,
+        ACTION_PAUSE,
+        ACTION_RIGHT,
+        ACTION_ROTATE,
+        ACTION_SOFT_DROP,
+        GestureState,
+        GestureDetector,
+    )
+    from tetris.HandTrackingModule import HandTracker
+except ModuleNotFoundError:
+    from GestureConversions import (
+        ACTION_KEY_MAP,
+        GestureKeyboardDispatcher,
+        KeyboardKey,
+        Win32Keyboard,
+    )
+    from HandGestures import (
+        ACTION_HARD_DROP,
+        ACTION_LEFT,
+        ACTION_PAUSE,
+        ACTION_RIGHT,
+        ACTION_ROTATE,
+        ACTION_SOFT_DROP,
+        GestureState,
+        GestureDetector,
+    )
+    from HandTrackingModule import HandTracker
 
 class ActionMode(Enum):
     CONTINUOUS = "continuous"
@@ -107,3 +128,53 @@ class TetrisKeyboardDispatcher(GestureKeyboardDispatcher):
                                 self._prev[action_name] = False
                         else:
                             self._prev[action_name] = False
+
+
+
+def main(camera_index: int = 0) -> None:
+    # All resources (camera, keyboard, dispatcher) are acquired inside
+    # this try-block so a failure to construct any of them still cleans
+    # up the ones already created.
+    cap = None
+    try:
+        cap = cv2.VideoCapture(camera_index)
+        if not cap.isOpened():
+            print(f"Error: Could not open camera {camera_index}")
+            return
+
+        print(
+            "Gesture keyboard synthesis is ACTIVE. Press Ctrl+Alt+G to "
+            "toggle. Focus must be on the target app (e.g. your game)."
+        )
+
+        keyboard = Win32Keyboard()
+        dispatcher = TetrisKeyboardDispatcher(keyboard)
+
+        try:
+            with HandTracker(max_hands=2) as tracker:
+                with GestureDetector() as detector:
+                    while True:
+                        success, img = cap.read()
+                        if not success:
+                            break
+
+                        img, hands = tracker.find_hands(img, draw=True)
+                        img = tracker.label_hands(img)
+                        state = detector.update(hands)
+                        detector.draw_gesture_overlay(img, state)
+                        dispatcher.dispatch(state)
+                        dispatcher.draw_pressed_keys_overlay(img, dispatcher, keyboard)
+
+                        cv2.imshow("Hand Gestures", img)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
+        finally:
+            dispatcher.release_all()
+            keyboard.shutdown()
+    finally:
+        if cap is not None:
+            cap.release()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+        main()

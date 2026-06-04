@@ -8,7 +8,10 @@ import cv2
 import time
 import numpy as np
 
-from HandTrackingModule import HandData, HandTracker
+try:
+    from tetris.HandTrackingModule import HandData, HandTracker
+except ModuleNotFoundError:
+    from HandTrackingModule import HandData, HandTracker
 
 WRIST = 0
 INDEX_MCP = 5

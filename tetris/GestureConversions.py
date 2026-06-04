@@ -8,18 +8,32 @@ from enum import Enum
 
 import cv2
 
-from HandGestures import (
-    ACTION_HARD_DROP,
-    ACTION_LEFT,
-    ACTION_PAUSE,
-    ACTION_RIGHT,
-    ACTION_ROTATE,
-    ACTION_SOFT_DROP,
-    ALL_ACTIONS,
-    GestureDetector,
-    GestureState,
-)
-from HandTrackingModule import HandTracker
+try:
+    from tetris.HandGestures import (
+        ACTION_HARD_DROP,
+        ACTION_LEFT,
+        ACTION_PAUSE,
+        ACTION_RIGHT,
+        ACTION_ROTATE,
+        ACTION_SOFT_DROP,
+        ALL_ACTIONS,
+        GestureDetector,
+        GestureState,
+    )
+    from tetris.HandTrackingModule import HandTracker
+except ModuleNotFoundError:
+    from HandGestures import (
+        ACTION_HARD_DROP,
+        ACTION_LEFT,
+        ACTION_PAUSE,
+        ACTION_RIGHT,
+        ACTION_ROTATE,
+        ACTION_SOFT_DROP,
+        ALL_ACTIONS,
+        GestureDetector,
+        GestureState,
+    )
+    from HandTrackingModule import HandTracker
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -402,6 +416,10 @@ class GestureKeyboardDispatcher:
         if not keys:
             return True
         return all(self._keyboard.release(key) for key in keys)
+    
+    @staticmethod
+    def draw_pressed_keys_overlay( img, dispatcher: "GestureKeyboardDispatcher", keyboard: "Win32Keyboard",) -> None:
+        draw_pressed_keys_overlay(img, dispatcher, keyboard)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -422,7 +440,7 @@ _PRETTY_KEY_NAMES: dict[KeyboardKey, str] = {
 }
 
 
-def _draw_pressed_keys_overlay(
+def draw_pressed_keys_overlay(
     img,
     dispatcher: "GestureKeyboardDispatcher",
     keyboard: "Win32Keyboard",
@@ -510,8 +528,7 @@ def main(camera_index: int = 0) -> None:
         )
 
         keyboard = Win32Keyboard()
-        from GameLogic import TetrisKeyboardDispatcher
-        dispatcher = TetrisKeyboardDispatcher(keyboard)
+        dispatcher = GestureKeyboardDispatcher(keyboard)
 
         try:
             with HandTracker(max_hands=2) as tracker:
@@ -521,11 +538,12 @@ def main(camera_index: int = 0) -> None:
                         if not success:
                             break
 
-                        img, hands = tracker.find_hands(img, draw=False)
+                        img, hands = tracker.find_hands(img, draw=True)
+                        img = tracker.label_hands(img)
                         state = detector.update(hands)
                         detector.draw_gesture_overlay(img, state)
                         dispatcher.dispatch(state)
-                        _draw_pressed_keys_overlay(img, dispatcher, keyboard)
+                        draw_pressed_keys_overlay(img, dispatcher, keyboard)
 
                         cv2.imshow("Hand Gestures", img)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
