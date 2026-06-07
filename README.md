@@ -100,13 +100,21 @@ You can bundle the application into a single executable that runs on Windows mac
 
 ### 3D Distance Formulation
 To prevent false fist detections when the hand is tilted toward/away from the camera (which collapses the 2D projected distance between finger tips and MCP joints), the controller uses a weighted 3D Euclidean distance:
-$$d = \sqrt{\Delta x^2 + \Delta y^2 + w_z \cdot \Delta z^2}$$
-A weight of $w_z = 2.0$ scales the MediaPipe depth coordinate to maintain curl estimation accuracy across different camera angles.
+
+```
+Distance = sqrt(dx² + dy² + w_z * dz²)
+```
+
+A weight factor of `w_z = 2.0` scales the depth coordinate (z) to maintain curl estimation accuracy across different camera angles.
 
 ### Palm Normal Gate
-To suppress false fist/rotation triggers when the hand is horizontal or inverted, the palm's normal vector is computed via the cross product of the vectors from the wrist to the index MCP, and the wrist to the pinky MCP:
-$$\vec{n} = (\vec{v}_{\text{wrist} \to \text{index}}) \times (\vec{v}_{\text{wrist} \to \text{pinky}})$$
-Rotations are gated so they only trigger if the normal vector aligns within a $90^\circ$ upright cone relative to the camera plane.
+To suppress false fist/rotation triggers when the hand is horizontal or inverted, the palm's normal vector is computed via the cross-product of the vector from the wrist to the index MCP (`v_a`) and the vector from the wrist to the pinky MCP (`v_b`):
+
+```
+normal_z = v_ax * v_by - v_ay * v_bx
+```
+
+Rotations are gated so they only trigger if the normal vector aligns within a 90-degree upright cone relative to the camera plane.
 
 ### Multi-Frame Confirmations
 To avoid accidental drops or lateral shifts from momentary hand drift or tracking jitter, swipes require a high-velocity movement pattern to be sustained across a minimum of $2$ consecutive frames before sending a key event.

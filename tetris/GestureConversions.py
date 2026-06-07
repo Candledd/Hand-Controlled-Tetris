@@ -8,36 +8,20 @@ from enum import Enum
 
 import cv2
 
-try:
-    from tetris.HandGestures import (
-        ACTION_HARD_DROP,
-        ACTION_HOLD,
-        ACTION_LEFT,
-        ACTION_RETRY,
-        ACTION_RIGHT,
-        ACTION_ROTATE,
-        ACTION_ROTATE_CCW,
-        ACTION_SOFT_DROP,
-        ALL_ACTIONS,
-        GestureDetector,
-        GestureState,
-    )
-    from tetris.HandTrackingModule import HandTracker
-except ModuleNotFoundError:
-    from HandGestures import (
-        ACTION_HARD_DROP,
-        ACTION_HOLD,
-        ACTION_LEFT,
-        ACTION_RETRY,
-        ACTION_RIGHT,
-        ACTION_ROTATE,
-        ACTION_ROTATE_CCW,
-        ACTION_SOFT_DROP,
-        ALL_ACTIONS,
-        GestureDetector,
-        GestureState,
-    )
-    from HandTrackingModule import HandTracker
+from tetris.HandGestures import (
+    ACTION_HARD_DROP,
+    ACTION_HOLD,
+    ACTION_LEFT,
+    ACTION_RETRY,
+    ACTION_RIGHT,
+    ACTION_ROTATE,
+    ACTION_ROTATE_CCW,
+    ACTION_SOFT_DROP,
+    ALL_ACTIONS,
+    GestureDetector,
+    GestureState,
+)
+from tetris.HandTrackingModule import HandTracker
 
 
 # An action can map to multiple keys that fire together, so the game
@@ -158,6 +142,7 @@ class Win32Keyboard:
         self._hotkey_thread: threading.Thread | None = None
         self._hotkey_stop = threading.Event()
         self._shutdown_called = False
+        self._toggle_lock = threading.Lock()
 
         if self._user32 is not None and sys.platform == "win32":
             self._start_hotkey_listener()
@@ -177,11 +162,12 @@ class Win32Keyboard:
 
     def toggle(self) -> bool:
         """Toggle keyboard synthesis. Returns the new state (True = suspended). Thread-safe."""
-        if self._suspended.is_set():
-            self._suspended.clear()
-            return False
-        self._suspended.set()
-        return True
+        with self._toggle_lock:
+            if self._suspended.is_set():
+                self._suspended.clear()
+                return False
+            self._suspended.set()
+            return True
 
     def _send(self, vk: int, key_up: bool) -> bool:
         """Send one synthetic key event. Returns False (no raise) if the
@@ -352,7 +338,8 @@ class GestureKeyboardDispatcher:
         keys = self._action_key_map.get(action_name, ())
         if not keys:
             return True
-        return all(self._keyboard.release(key) for key in keys)
+        results = [self._keyboard.release(key) for key in keys]
+        return all(results)
     
     @staticmethod
     def draw_pressed_keys_overlay( img, dispatcher: "GestureKeyboardDispatcher", keyboard: "Win32Keyboard",) -> None:
@@ -439,50 +426,3 @@ def draw_pressed_keys_overlay(
         )
 
 
-def main(camera_index: int = 0) -> None:
-    # Acquire everything in this try-block so a mid-init failure still
-    # cleans up resources already created.
-    cap = None
-    try:
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            print(f"Error: Could not open camera {camera_index}")
-            return
-
-        print(
-            "Gesture keyboard synthesis is ACTIVE. Press Ctrl+Alt+G to "
-            "toggle. Focus must be on the target app (e.g. your game)."
-        )
-
-        keyboard = Win32Keyboard()
-        dispatcher = GestureKeyboardDispatcher(keyboard)
-
-        try:
-            with HandTracker(max_hands=2) as tracker:
-                with GestureDetector() as detector:
-                    while True:
-                        success, img = cap.read()
-                        if not success:
-                            break
-
-                        img, hands = tracker.find_hands(img, draw=True)
-                        img = tracker.label_hands(img)
-                        state = detector.update(hands)
-                        detector.draw_gesture_overlay(img, state)
-                        dispatcher.dispatch(state)
-                        draw_pressed_keys_overlay(img, dispatcher, keyboard)
-
-                        cv2.imshow("Hand Gestures", img)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            break
-        finally:
-            dispatcher.release_all()
-            keyboard.shutdown()
-    finally:
-        if cap is not None:
-            cap.release()
-        cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    main()

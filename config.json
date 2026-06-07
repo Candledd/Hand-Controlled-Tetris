@@ -1,0 +1,27 @@
+{
+  "gestures": {
+    "fist_curled_threshold": 0.09,
+    "min_curled_fingers": 5,
+    "hard_drop_velocity": 0.03,
+    "soft_drop_threshold": 0.06,
+    "drop_velocity_divisor": 6,
+    "hard_drop_cooldown": 15,
+    "swipe_threshold": 0.075,
+    "swipe_velocity_divisor": 5,
+    "z_weight": 2.0,
+    "palm_tilt_threshold": 0.35,
+    "ema_alpha": 0.5,
+    "curled_tip_proximity": 0.15,
+    "gesture_motion_gate": 0.012
+  },
+  "keybindings": {
+    "left": ["LEFT", "NUMPAD4"],
+    "right": ["RIGHT", "NUMPAD6"],
+    "rotate": ["UP", "NUMPAD9"],
+    "rotate_ccw": ["CONTROL", "Z"],
+    "hard_drop": ["SPACE", "NUMPAD8"],
+    "soft_drop": ["DOWN", "NUMPAD2"],
+    "retry": ["R"],
+    "hold": ["SHIFT", "C"]
+  }
+}
