@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
+import time
 from ctypes import wintypes
 from enum import Enum
 
@@ -143,6 +144,7 @@ class Win32Keyboard:
         self._hotkey_stop = threading.Event()
         self._shutdown_called = False
         self._toggle_lock = threading.Lock()
+        self._last_error_time = 0.0
 
         if self._user32 is not None and sys.platform == "win32":
             self._start_hotkey_listener()
@@ -184,11 +186,15 @@ class Win32Keyboard:
         inp.u.ki.dwExtraInfo = 0
         sent = self._user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
         if sent == 0 and self._kernel32 is not None:
-            err = ctypes.get_last_error()
-            print(
-                f"[Win32Keyboard] SendInput failed for vk=0x{vk:02X} "
-                f"key_up={key_up} (Win32 error {err})"
-            )
+            now = time.monotonic()
+            if now - self._last_error_time > 1.0:
+                err = ctypes.get_last_error()
+                print(
+                    f"[Win32Keyboard] SendInput failed for vk=0x{vk:02X} "
+                    f"key_up={key_up} (Win32 error {err}). Further errors "
+                    "will be rate-limited."
+                )
+                self._last_error_time = now
         return sent != 0
 
     def press(self, key: KeyboardKey) -> bool:
@@ -250,13 +256,6 @@ class Win32Keyboard:
         self._hotkey_stop.set()
         if self._hotkey_thread is not None:
             self._hotkey_thread.join(timeout=0.5)
-
-    def __del__(self) -> None:
-        # Safety net for callers that forget shutdown(); never raise.
-        try:
-            self.shutdown()
-        except Exception:
-            pass
 
 
 class GestureKeyboardDispatcher:

@@ -57,10 +57,10 @@ class HandData:
 
 
 def draw_landmarks_on_image(rgb_image: np.ndarray, detection_result) -> np.ndarray:
-    annotated_image = np.copy(rgb_image)
     if not detection_result or not detection_result.hand_landmarks:
-        return annotated_image
+        return rgb_image
 
+    annotated_image = np.copy(rgb_image)
     for hand_landmarks in detection_result.hand_landmarks:
         mp_drawing.draw_landmarks(
             annotated_image,
