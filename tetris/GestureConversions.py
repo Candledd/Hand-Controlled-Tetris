@@ -145,6 +145,7 @@ class Win32Keyboard:
         self._shutdown_called = False
         self._toggle_lock = threading.Lock()
         self._last_error_time = 0.0
+        self._inp = _INPUT()  # Pre-allocated, reused by _send()
 
         if self._user32 is not None and sys.platform == "win32":
             self._start_hotkey_listener()
@@ -177,7 +178,7 @@ class Win32Keyboard:
         """
         if self._user32 is None or self._suspended.is_set():
             return False
-        inp = _INPUT()
+        inp = self._inp
         inp.type = _INPUT_KEYBOARD
         inp.u.ki.wVk = vk
         inp.u.ki.wScan = 0

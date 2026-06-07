@@ -84,6 +84,9 @@ class GestureState:
     def active_actions(self) -> list[str]:
         return [name for name, pressed in self.actions.items() if pressed]
 
+    # Added for telemetry
+    hand_size: float = 0.0
+
 @dataclass
 class HandState:
     smoothed_wrist: tuple[float, float] | None = None
@@ -134,6 +137,53 @@ def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
+        2,
+    )
+    dist = state.hand_size
+    if dist < 0.001:
+        status_text = "N/A"
+        color = (128, 128, 128)  # Gray
+    elif 0.125 < dist < 0.190:
+        status_text = "Ideal"
+        color = (0, 255, 0)  # Green
+    elif 0.110 <= dist <= 0.125:
+        status_text = "Acceptable (Far)"
+        color = (0, 255, 255)  # Yellow
+    elif 0.190 <= dist <= 0.220:
+        status_text = "Acceptable (Close)"
+        color = (0, 255, 255)  # Yellow
+    elif dist < 0.100:
+        status_text = "TOO FAR - Move Closer"
+        color = (0, 0, 255)  # Red
+    else:  # dist > 0.220
+        status_text = "TOO CLOSE - Move Back"
+        color = (0, 0, 255)  # Red
+
+    base_text = f"Hand Size (Distance): {dist:.3f}" if dist >= 0.001 else "Hand Size (Distance): -"
+    x_pos = int(w * 0.02)
+    y_pos = int(h * 0.90)
+
+    cv2.putText(
+        img,
+        base_text,
+        (x_pos, y_pos),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 255),
+        2,
+    )
+
+    (text_w, text_h), baseline = cv2.getTextSize(
+        base_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+    )
+
+    cv2.putText(
+        img,
+        f"[{status_text}]",
+        (x_pos + text_w + 12, y_pos),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        color,
         2,
     )
 
@@ -198,6 +248,15 @@ class GestureDetector:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         return None
+
+    @staticmethod
+    def _palm_scale(hand: HandData) -> float:
+        """Approximate hand scale from wrist-to-middle-MCP distance in normalized coords."""
+        w = hand.landmarks_norm[WRIST]
+        m = hand.landmarks_norm[MIDDLE_MCP]
+        dx = w[0] - m[0]
+        dy = w[1] - m[1]
+        return max((dx * dx + dy * dy) ** 0.5, 0.01)
 
     @staticmethod
     def draw_gesture_overlay(img: np.ndarray, state: GestureState) -> None:
@@ -267,6 +326,7 @@ class GestureDetector:
         return GestureState(
             gesture=last_gesture,
             actions=combined_actions,
+            hand_size=self._palm_scale(hands[0]) if hands else 0.0
         )
 
     def _present_hand_keys(self, hands: list[HandData]) -> set[HandKey]:

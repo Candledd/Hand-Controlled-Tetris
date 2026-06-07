@@ -125,7 +125,8 @@ class HandTracker:
 
         if draw:
             annotated_rgb = draw_landmarks_on_image(img_rgb, detection_result)
-            img = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
+            if annotated_rgb is not img_rgb:
+                img = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
 
         return img, self._hands
 
