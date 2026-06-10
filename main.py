@@ -14,6 +14,9 @@ try:
 except ImportError:
     pass
 
+import threading
+import time
+
 @contextlib.contextmanager
 def suppress_stderr():
     """Redirect both Python sys.stderr and underlying C++ FD 2 to devnull."""
@@ -61,6 +64,52 @@ with suppress_stderr():
     from tetris.GestureConversions import Win32Keyboard, KeyboardKey, ACTION_KEY_MAP
     from tetris.GameLogic import TetrisKeyboardDispatcher
 
+class CameraStream:
+    def __init__(self, camera_id: int = 0) -> None:
+        self.cap = cv2.VideoCapture(camera_id)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Could not open camera {camera_id}")
+
+        self._frame = None
+        self._frame_id = 0
+        self._new_frame = False
+        self._lock = threading.Lock()
+        self._stopped = threading.Event()
+
+        self._thread = threading.Thread(target=self._update, daemon=True)
+        self._thread.start()
+
+    def _update(self) -> None:
+        """Daemon thread: continuously reads frames, resizes, and keeps the newest."""
+        while not self._stopped.is_set():
+            success, frame = self.cap.read()
+            if success:
+                frame = cv2.resize(frame, (0, 0), fx=0.8, fy=0.8)
+                with self._lock:
+                    self._frame = frame
+                    self._frame_id += 1
+                    self._new_frame = True
+            else:
+                time.sleep(0.01)
+
+    def read(self):
+        """
+        *new_frame_available* is True only when a frame has been captured since
+        the previous call.  *frame* is the most recent frame (or None on the
+        very first call).  *frame_id* increments monotonically.
+        """
+        with self._lock:
+            frame = self._frame
+            frame_id = self._frame_id
+            new = self._new_frame
+            self._new_frame = False
+        return new, frame, frame_id
+
+    def release(self) -> None:
+        self._stopped.set()
+        self._thread.join(timeout=1.0)
+        self.cap.release()
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Tetris Hand Gesture Controller")
     parser.add_argument("--camera", type=int, default=0, help="Camera index")
@@ -97,10 +146,7 @@ def main() -> None:
     
     action_key_map = build_action_key_map(key_config)
 
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print(f"Error: Could not open camera {args.camera}", file=sys.stderr)
-        sys.exit(1)
+    stream = CameraStream(args.camera)
 
     keyboard = Win32Keyboard()
     dispatcher = TetrisKeyboardDispatcher(keyboard, action_key_map=action_key_map)
@@ -116,9 +162,16 @@ def main() -> None:
         with tracker:
             with GestureDetector(**gesture_config) as detector:
                 while True:
-                    success, img = cap.read()
-                    if not success:
-                        break
+                    new_frame, img, _ = stream.read()
+                    if not new_frame:
+                        if not args.no_preview:
+                            if cv2.waitKey(1) & 0xFF == 27:
+                                break
+                        time.sleep(0.005)
+                        continue
+
+                    if img is None:
+                        continue
 
                     img, hands = tracker.find_hands(img, draw=not args.no_preview)
                     if not args.no_preview:
@@ -132,7 +185,6 @@ def main() -> None:
                         dispatcher.draw_pressed_keys_overlay(img, dispatcher, keyboard)
                         cv2.imshow("Hand Gestures", img)
                         
-                        # Break loop if the window is closed or ESC key is pressed
                         if cv2.getWindowProperty("Hand Gestures", cv2.WND_PROP_VISIBLE) < 1:
                             break
                         if cv2.waitKey(1) & 0xFF == 27:
@@ -140,7 +192,7 @@ def main() -> None:
     finally:
         dispatcher.release_all()
         keyboard.shutdown()
-        cap.release()
+        stream.release()
         if not args.no_preview:
             cv2.destroyAllWindows()
 
@@ -148,5 +200,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        # Exit cleanly on Ctrl+C without showing traceback
         sys.exit(0)
