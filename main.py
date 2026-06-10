@@ -6,7 +6,7 @@ import contextlib
 import argparse
 import json
 
-# Silence TensorFlow, MediaPipe, and other log noise
+# Silence TensorFlow / MediaPipe log noise
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 try:
     from absl import logging as absl_logging
@@ -19,7 +19,7 @@ import time
 
 @contextlib.contextmanager
 def suppress_stderr():
-    """Redirect both Python sys.stderr and underlying C++ FD 2 to devnull."""
+    """Redirect Python stderr and C++ FD 2 to devnull."""
     try:
         stderr_fd = sys.stderr.fileno()
     except Exception:
@@ -35,9 +35,7 @@ def suppress_stderr():
 
     with open(os.devnull, 'wb') as devnull:
         old_stderr = sys.stderr
-        # Redirect Python's stderr
         sys.stderr = devnull
-        # Redirect C++ FD level stderr
         if stderr_fd is not None:
             try:
                 os.dup2(devnull.fileno(), stderr_fd)
@@ -80,7 +78,7 @@ class CameraStream:
         self._thread.start()
 
     def _update(self) -> None:
-        """Daemon thread: continuously reads frames, resizes, and keeps the newest."""
+        """Continuously read frames, resize 80%, keep the newest."""
         while not self._stopped.is_set():
             success, frame = self.cap.read()
             if success:
@@ -93,11 +91,7 @@ class CameraStream:
                 time.sleep(0.01)
 
     def read(self):
-        """
-        *new_frame_available* is True only when a frame has been captured since
-        the previous call.  *frame* is the most recent frame (or None on the
-        very first call).  *frame_id* increments monotonically.
-        """
+        """Returns (new_frame_available, frame, frame_id)."""
         with self._lock:
             frame = self._frame
             frame_id = self._frame_id

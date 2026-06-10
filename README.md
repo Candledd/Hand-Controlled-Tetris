@@ -11,6 +11,8 @@ A real-time computer vision controller that allows you to play Tetris using hand
 - **Gesture Stabilization**: Incorporates 3D depth filtering, palm orientation checks, and multi-frame confirmations to minimize false-positive inputs.
 - **Visual Overlay Feed**: Provides an OpenCV preview window showing hand landmark tracking, active gestures, and triggered key presses.
 - **Global Control Toggle**: Use the `Ctrl + Alt + G` hotkey to temporarily suspend/resume keyboard inputs at any time.
+- **Async ML Pipeline**: Hand detection runs on a background thread via MediaPipe LIVE_STREAM mode, keeping the game loop responsive.
+- **Frame Buffer Draining**: A dedicated camera thread pulls frames continuously and scales them by 50%, eliminating frame backlog and reducing latency.
 
 ---
 
@@ -43,7 +45,7 @@ A real-time computer vision controller that allows you to play Tetris using hand
 
 1. **Clone the repository**:
    ```cmd
-   git clone https://github.com/your-username/tetris.git
+   git clone https://github.com/Candledd/tetris.git
    cd tetris
    ```
 
@@ -94,9 +96,20 @@ You can bundle the application into a single executable that runs on Windows mac
 4. If you need to temporarily stop inputs (e.g. to type text elsewhere), press the **`Ctrl + Alt + G`** toggle shortcut.
 5. To close the program, press the **`Esc`** key on your keyboard or click the **`X`** close button on the preview window.
 
+### Command-Line Options
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--camera N` | `0` | Camera index (useful if you have multiple webcams) |
+| `--no-preview` | (off) | Disable the OpenCV preview window (reduces CPU usage) |
+| `--config PATH` | `config.json` | Path to a custom gesture/keybinding config file |
+
 ---
 
 ## Technical Implementation Details
+
+### Async ML Pipeline
+Hand detection runs asynchronously via MediaPipe's `LIVE_STREAM` mode. Each frame is dispatched to the ML thread and the main loop immediately reads the most recently available result — zero blocking. A dedicated camera thread continuously pulls frames from the webcam, scales them to 80% resolution, and exposes only the newest frame to the detector, eliminating buffer buildup.
 
 ### 3D Distance Formulation
 To prevent false fist detections when the hand is tilted toward/away from the camera (which collapses the 2D projected distance between finger tips and MCP joints), the controller uses a weighted 3D Euclidean distance:
@@ -123,5 +136,5 @@ To avoid accidental drops or lateral shifts from momentary hand drift or trackin
 
 ## Troubleshooting
 
-* **Camera index issues**: If you have multiple cameras and the app fails to open the webcam feed, edit the index in `main.py` where `cv2.VideoCapture(camera_index)` is instantiated (e.g., change `0` to `1` or `2`).
+* **Camera index issues**: Use the `--camera` flag to select a different device, e.g. `python main.py --camera 1`.
 * **Active focus requirement**: Keystrokes are injected globally via the Windows API, meaning they target whichever application currently has active focus. Ensure your Tetris game is the active window before gesturing.

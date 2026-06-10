@@ -9,8 +9,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-# Landmark indices for each fingertip (thumb → pinky).
-FINGER_TIPS = (4, 8, 12, 16, 20)
+FINGER_TIPS = (4, 8, 12, 16, 20)  # thumb→pinky tip indices
 
 mp_hands = mp.tasks.vision.HandLandmarksConnections
 mp_drawing = mp.tasks.vision.drawing_utils
@@ -30,7 +29,6 @@ class HandData:
 
 
 def draw_landmarks_on_image(image: np.ndarray, detection_result) -> np.ndarray:
-    """Draw hand landmarks directly onto the provided image (no copy)."""
     if not detection_result or not detection_result.hand_landmarks:
         return image
 
@@ -47,7 +45,7 @@ def draw_landmarks_on_image(image: np.ndarray, detection_result) -> np.ndarray:
 
 
 def label_hands_on_image(img: np.ndarray, hands: list[HandData]) -> None:
-    """Draw Left/Right labels for each detected hand."""
+    """Label each hand as Left/Right."""
     for hand in hands:
         if not hand.landmarks_px:
             continue
@@ -66,7 +64,7 @@ def label_hands_on_image(img: np.ndarray, hands: list[HandData]) -> None:
 
 
 class HandTracker:
-    """MediaPipe hand detection, drawing, and landmark access."""
+    """MediaPipe hand detection with async LIVE_STREAM."""
 
     def __init__(
         self,
@@ -95,12 +93,12 @@ class HandTracker:
         self._landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
 
     def find_hands(self, img: np.ndarray, draw: bool = True) -> tuple[np.ndarray, list[HandData]]:
-        """Detect hands in a BGR frame. Optionally draw landmarks on the frame."""
+        """Detect hands in a BGR frame. Returns (img, hands)."""
         height, width = img.shape[:2]
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
 
-        # Wall-clock timestamp (strictly increasing) required by LIVE_STREAM mode.
+        # Timestamp for LIVE_STREAM mode
         ts = int(time.monotonic() * 1000)
         if ts <= self._last_timestamp:
             ts = self._last_timestamp + 1
@@ -122,12 +120,11 @@ class HandTracker:
     def label_hands(
         self, img: np.ndarray, hands: list[HandData] | None = None
     ) -> np.ndarray:
-        """Draw Left/Right labels on the frame. Uses last detected hands if none passed."""
         label_hands_on_image(img, hands if hands is not None else self._hands)
         return img
 
     def get_finger_tips(self, hand_no: int = 0) -> list[tuple[int, int]]:
-        """Pixel positions of the five fingertips for gesture / movement logic."""
+        """Pixel positions of the five fingertips."""
         if hand_no >= len(self._hands):
             return []
         hand = self._hands[hand_no]
